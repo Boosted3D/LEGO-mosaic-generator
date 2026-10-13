@@ -19,7 +19,7 @@ with st.sidebar:
     palette_mode = "color" if mode_label == "Kleur" else "grayscale"
     grid_size = st.selectbox("Format", [48, 30], index=0,
                              format_func=lambda x: f"{x}×{x} studs" + (" (1 plate)" if x == 30 else " (4 separate tiles of 24×24)"))
-    reserve = st.number_input("Reserve (%)", 0.0, 100.0, 10.0, 1.0)
+    reserve = st.number_input("Reserve (%)", 0.0, 100.0, 5.0, 1.0)
     if palette_mode == "grayscale":
         thickness = st.number_input("Baseplate thickness (mm)", 0.4, 10.0, 1.6, 0.2)
         base = st.selectbox("Baseplate color", [c.code for c in L.GRAYSCALE_PALETTE],

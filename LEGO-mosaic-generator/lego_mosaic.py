@@ -76,7 +76,7 @@ class Options:
     palette_mode: str = "color"        # "color" or "grayscale"
     pitch: float = PITCH_MM
     bed: float = BED_MM
-    reserve_pct: float = 10.0          # extra studs in percentage
+    reserve_pct: float = 5.0           # extra studs in percentage
     plate_thickness: float = 1.6       # baseplate thickness (mm)
     base_color: str = "BK"             # baseplate color code
     dither: bool = False               # Floyd-Steinberg dithering
@@ -721,7 +721,7 @@ def main(argv=None) -> int:
                     help="palette mode (default: color)")
     ap.add_argument("--out", default="output", help="output directory")
     ap.add_argument("--assets", default=None, help="directory with stud.stl")
-    ap.add_argument("--reserve", type=float, default=10.0, help="reserve in %%")
+    ap.add_argument("--reserve", type=float, default=5.0, help="reserve in %%")
     ap.add_argument("--thickness", type=float, default=1.6, help="baseplate thickness in mm")
     ap.add_argument("--base-color", default="BK", choices=[c.code for c in PALETTE])
     ap.add_argument("--dither", action="store_true")
