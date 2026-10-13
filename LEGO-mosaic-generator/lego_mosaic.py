@@ -594,6 +594,11 @@ def _validate(o: Options) -> None:
         raise MosaicError("Plate thickness must be greater than 0.")
 
 
+def _filename_slug(value: str) -> str:
+    """Make a readable filename part without path separators or punctuation."""
+    return re.sub(r"[^a-z0-9_-]+", "_", value.lower()).strip("_")
+
+
 def generate(image_source, out_dir: str | Path = "output",
              assets_dir: str | Path | None = None, options: Options | None = None) -> Result:
     o = options or Options()
@@ -668,7 +673,7 @@ def generate(image_source, out_dir: str | Path = "output",
     stl_files = []
     for i, (c, k) in enumerate(zip(palette, per_color)):
         for b, pos in enumerate(loose_positions(k, stud_w, o), start=1):
-            fp = spare_dir / f"spare_{c.code}_{c.name_en.lower().replace(' ', '_')}_bed{b:02d}.stl"
+            fp = spare_dir / f"spare_{c.code}_{_filename_slug(c.name_en)}_bed{b:02d}.stl"
             write_stl(tile_mesh(stud, pos), fp)
             stl_files.append(fp)
 
@@ -699,7 +704,7 @@ def generate(image_source, out_dir: str | Path = "output",
     for i, (c, row) in enumerate(zip(palette, res.bom)):
         needed = row["needed"]
         for b, pos in enumerate(loose_positions(needed, stud_w, o), start=1):
-            name = f"plate_{c.code}_{c.name_en.lower().replace(' ', '_')}_bed{b:02d}"
+            name = f"plate_{c.code}_{_filename_slug(c.name_en)}_bed{b:02d}"
             obj = PrintObject(f"Studs {c.name_en}", tile_mesh(stud, pos), c.rgb, i + 1)
             p3mf, pstl = out / f"{name}.3mf", out / f"{name}.stl"
             write_3mf(p3mf, [obj], f"{c.name_en} plate ({len(pos)} studs)")
