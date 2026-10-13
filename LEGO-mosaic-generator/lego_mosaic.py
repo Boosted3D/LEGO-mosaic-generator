@@ -317,142 +317,203 @@ def write_bambu_multi_plate_3mf(
     title: str = "LEGO mosaic",
     palette: tuple[LegoColor, ...] = COLOR_PALETTE,
 ) -> None:
-    """Write one Bambu Studio project with the supplied objects on named plates."""
+    """Write a Bambu Studio project using the object/plate structure in the
+    supplied P1S reference project. Each input plate remains a separate plate;
+    its objects keep their palette filament slot and all geometry is retained.
+    """
     plates = [(name, objects) for name, objects in plates if objects]
     if not plates:
         raise MosaicError("No print plates were generated.")
 
     def xml_attr(value: str) -> str:
         return escape(value, {'"': "&quot;"})
+    if len(palette) != 12:
+        raise MosaicError("The Bambu P1S project requires the complete 12-color palette.")
 
-    # Seed the material table from the complete app palette so colors do not
-    # disappear when a particular image happens not to use them.
-    materials: list[tuple[str, tuple[int, int, int]]] = []
-    material_index_by_rgb: dict[tuple[int, int, int], int] = {}
-    for color in palette:
-        if color.rgb not in material_index_by_rgb:
-            material_index_by_rgb[color.rgb] = len(materials)
-            materials.append((color.name_en, color.rgb))
-    objects_xml: list[str] = []
-    builds_xml: list[str] = []
+    # The uploaded, working P1S project supplies the full set of printer,
+    # process and filament settings that Bambu Studio expects.
+    template_path = Path(__file__).resolve().parent / "assets" / "bambu_p1s_project_settings.json"
+    try:
+        project_cfg = json.loads(template_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MosaicError(f"Could not load the Bambu P1S project profile: {exc}") from exc
+
+    slot_count = len(palette)
+    project_cfg["filament_colour"] = [color.hex for color in palette]
+    project_cfg["filament_self_index"] = [str(slot) for slot in range(1, slot_count + 1)]
+    # The printer has one physical nozzle. Every palette filament maps to it;
+    # the user changes filament between the separate color plates.
+    project_cfg["filament_map"] = ["1"] * slot_count
+    project_cfg["flush_volumes_matrix"] = [
+        "0" if row == col else "300"
+        for row in range(slot_count) for col in range(slot_count)
+    ]
+    project_cfg["flush_volumes_vector"] = ["140"] * (slot_count * 2)
+    for key in ("wipe_tower_x", "wipe_tower_y"):
+        values = project_cfg.get(key, ["165"] if key.endswith("_x") else ["250"])
+        seed = values[-1] if values else ("165" if key.endswith("_x") else "250")
+        project_cfg[key] = (values[:len(plates)] + [seed] * len(plates))[:len(plates)]
+
+    wrappers: list[str] = []
+    build_items: list[str] = []
+    relationships: list[str] = []
     settings_objects: list[str] = []
-    plate_xml: list[str] = []
-    object_id = 2
-    plate_columns = math.ceil(math.sqrt(len(plates)))
-    # Bambu Studio lays logical plates out as bed-sized cells with a 20% gap.
-    # Keep each color mesh in its own cell so different plates cannot overlap.
+    plate_configs: list[str] = []
+    object_files: list[tuple[str, str]] = []
+    wrapper_id = 2
+    plate_columns = 3
     plate_stride = BED_MM * 1.2
+
     for plate_index, (plate_name, print_objects) in enumerate(plates):
+        instance_xml: list[str] = []
         plate_x = (plate_index % plate_columns) * plate_stride
         plate_y = -(plate_index // plate_columns) * plate_stride
-        instance_xml: list[str] = []
-        # Keep a complete, 1-based identity map for each plate. Bambu Studio
-        # uses the map together with each model object's `extruder` metadata.
-        filament_map = " ".join(str(slot) for slot in range(1, len(palette) + 1))
-        filament_volume_map = " ".join("0" for _ in palette)
+
         for print_object in print_objects:
-            if print_object.rgb not in material_index_by_rgb:
+            if not 1 <= print_object.extruder <= slot_count:
                 raise MosaicError(
-                    f"Object '{print_object.name}' uses a color outside the project palette."
+                    f"Object '{print_object.name}' references filament slot {print_object.extruder}; "
+                    f"the project defines {slot_count} slots."
                 )
-            if not 1 <= print_object.extruder <= len(palette):
+            if tuple(print_object.rgb) != palette[print_object.extruder - 1].rgb:
                 raise MosaicError(
-                    f"Object '{print_object.name}' references filament slot "
-                    f"{print_object.extruder}, but the project defines {len(palette)} slots."
+                    f"Object '{print_object.name}' filament slot does not match its palette color."
                 )
-            material_index = material_index_by_rgb[print_object.rgb]
-            obj_uuid, item_uuid = str(uuid.uuid4()), str(uuid.uuid4())
+
+            wrapper_uuid = str(uuid.uuid4())
+            component_uuid = str(uuid.uuid4())
+            item_uuid = str(uuid.uuid4())
+            inner_id = wrapper_id - 1
             vertices = print_object.mesh.vertices
             faces = print_object.mesh.faces
-            mesh_xml = ["      <mesh><vertices>"]
+            lo, hi = print_object.mesh.bounds()
+            center_x = float((lo[0] + hi[0]) / 2.0)
+            center_y = float((lo[1] + hi[1]) / 2.0)
+            source_z = float(lo[2])
+            centered_vertices = vertices.copy()
+            centered_vertices[:, 0] -= center_x
+            centered_vertices[:, 1] -= center_y
+            centered_vertices[:, 2] -= source_z
+
+            mesh_xml = [
+                '<?xml version="1.0" encoding="UTF-8"?>',
+                '<model unit="millimeter" xml:lang="en-US" '
+                'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
+                'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" '
+                'requiredextensions="p"><resources>',
+                f'<object id="{inner_id}" type="model" p:UUID="{uuid.uuid4()}"><mesh><vertices>',
+            ]
             mesh_xml.extend(
-                f'<vertex x="{x:.4f}" y="{y:.4f}" z="{z:.4f}"/>'
-                for x, y, z in vertices
+                f'<vertex x="{x:.6f}" y="{y:.6f}" z="{z:.6f}"/>'
+                for x, y, z in centered_vertices
             )
             mesh_xml.append("</vertices><triangles>")
             mesh_xml.extend(
-                f'<triangle v1="{a}" v2="{b}" v3="{c}" pid="1" p1="{material_index}"/>'
+                f'<triangle v1="{int(a)}" v2="{int(b)}" v3="{int(c)}"/>'
                 for a, b, c in faces
             )
-            mesh_xml.append("</triangles></mesh>")
-            objects_xml.append(
-                f'<object id="{object_id}" name="{escape(print_object.name)}" '
-                f'type="model" pid="1" pindex="{material_index}" p:UUID="{obj_uuid}">'
-                f'{"".join(mesh_xml)}</object>'
+            mesh_xml.append("</triangles></mesh></object></resources></model>")
+            object_filename = f"3D/Objects/object_{wrapper_id}.model"
+            object_files.append((object_filename, "".join(mesh_xml)))
+
+            component_path = f"/3D/Objects/object_{wrapper_id}.model"
+            wrappers.append(
+                f'<object id="{wrapper_id}" type="model" p:UUID="{wrapper_uuid}">'
+                '<components>'
+                f'<component p:path="{component_path}" objectid="{inner_id}" '
+                f'transform="1 0 0 0 1 0 0 0 1 0 0 0" p:UUID="{component_uuid}"/>'
+                '</components></object>'
             )
-            builds_xml.append(
-                f'<item objectid="{object_id}" p:UUID="{item_uuid}" '
-                f'transform="1 0 0 0 1 0 0 0 1 {plate_x:.4f} {plate_y:.4f} 0" '
-                'printable="1"/>'
+            relationships.append(
+                f'<Relationship Target="/3D/Objects/object_{wrapper_id}.model" '
+                f'Id="rel-{wrapper_id}" '
+                'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
             )
+            build_items.append(
+                f'<item objectid="{wrapper_id}" p:UUID="{item_uuid}" '
+                f'transform="1 0 0 0 1 0 0 0 1 {plate_x + center_x:.6f} '
+                f'{plate_y + center_y:.6f} 0"/>'
+            )
+
+            safe_name = xml_attr(print_object.name)
+            face_count = len(faces)
             settings_objects.append(
-                f'<object id="{object_id}"><metadata key="name" value="{xml_attr(print_object.name)}"/>'
-                f'<metadata key="extruder" value="{print_object.extruder}"/></object>'
+                f'<object id="{wrapper_id}">'
+                f'<metadata key="name" value="{safe_name}"/>'
+                f'<metadata key="extruder" value="{print_object.extruder}"/>'
+                f'<metadata face_count="{face_count}"/>'
+                f'<part id="{inner_id}" subtype="normal_part">'
+                f'<metadata key="name" value="{safe_name}"/>'
+                '<metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>'
+                '<metadata key="source_object_id" value="0"/>'
+                '<metadata key="source_volume_id" value="0"/>'
+                f'<metadata key="source_offset_x" value="{center_x:.6f}"/>'
+                f'<metadata key="source_offset_y" value="{center_y:.6f}"/>'
+                f'<metadata key="source_offset_z" value="{source_z:.6f}"/>'
+                f'<mesh_stat face_count="{face_count}" edges_fixed="0" '
+                'degenerate_facets="0" facets_removed="0" facets_reversed="0" backwards_edges="0"/>'
+                '</part></object>'
             )
             instance_xml.append(
                 '<model_instance>'
-                f'<metadata key="object_id" value="{object_id}"/>'
+                f'<metadata key="object_id" value="{wrapper_id}"/>'
                 '<metadata key="instance_id" value="0"/>'
-                f'<metadata key="identify_id" value="{object_id}"/>'
+                f'<metadata key="identify_id" value="{200 + plate_index * 10}"/>'
                 '</model_instance>'
             )
-            object_id += 1
+            wrapper_id += 2
 
-        safe_name = re.sub(r'[<>:/\\|?*"]', "-", plate_name).strip() or f"Plate {plate_index + 1}"
-        plate_xml.append(
+        safe_plate_name = re.sub(r'[<>:/\\|?*"]', "-", plate_name).strip() or f"Plate {plate_index + 1}"
+        plate_configs.append(
             f'<plate><metadata key="plater_id" value="{plate_index + 1}"/>'
-            f'<metadata key="plater_name" value="{xml_attr(safe_name)}"/>'
+            f'<metadata key="plater_name" value="{xml_attr(safe_plate_name)}"/>'
             '<metadata key="locked" value="false"/>'
-            '<metadata key="filament_map_mode" value="Manual"/>'
-            f'<metadata key="filament_maps" value="{filament_map}"/>'
-            f'<metadata key="filament_volume_maps" value="{filament_volume_map}"/>'
+            '<metadata key="filament_map_mode" value="Auto For Flush"/>'
+            f'<metadata key="filament_maps" value="{" ".join(["1"] * slot_count)}"/>'
             f'{"".join(instance_xml)}</plate>'
         )
 
-    material_xml = [f'<base name="{escape(name)}" displaycolor="#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}FF"/>'
-                    for name, rgb in materials]
     model_xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<model unit="millimeter" xml:lang="en-US" '
         'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
         'xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" '
-        'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p">'
+        'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" '
+        'requiredextensions="p">'
         f'<metadata name="Title">{escape(title)}</metadata>'
-        '<metadata name="Application">BambuStudio-02.06.00.51</metadata>'
+        '<metadata name="Application">BambuStudio-02.00.03.54</metadata>'
         '<metadata name="BambuStudio:3mfVersion">1</metadata>'
-        f'<resources><basematerials id="1">{"".join(material_xml)}</basematerials>{"".join(objects_xml)}</resources>'
-        f'<build p:UUID="{uuid.uuid4()}">{"".join(builds_xml)}</build></model>'
+        f'<resources>{"".join(wrappers)}</resources>'
+        f'<build p:UUID="{uuid.uuid4()}">{"".join(build_items)}</build></model>'
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Target="/3D/3dmodel.model" Id="rel0" '
+        'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
+        '</Relationships>'
+    )
+    model_rels = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        f'{"".join(relationships)}</Relationships>'
     )
     model_settings = (
         '<?xml version="1.0" encoding="UTF-8"?><config>'
-        f'{"".join(settings_objects)}{"".join(plate_xml)}</config>'
+        f'{"".join(settings_objects)}{"".join(plate_configs)}</config>'
     )
-    # Define every app color as an actual project filament slot. Base-material
-    # colors only affect model display; Bambu assigns printable colors through
-    # these slots and each object's `extruder` setting above.
-    project_settings = json.dumps({
-        "from": "project",
-        "type": "process",
-        "name": title,
-        "version": "02.06.00.51",
-        "filament_colour": [color.hex for color in palette],
-        "filament_multi_colour": [color.hex for color in palette],
-        "filament_colour_type": ["1"] * len(palette),
-        "filament_settings_id": ["Generic PLA @base"] * len(palette),
-        "default_filament_profile": ["Generic PLA @base"] * len(palette),
-        "filament_type": ["PLA"] * len(palette),
-        "filament_vendor": ["Generic"] * len(palette),
-        "filament_ids": ["GFL99"] * len(palette),
-        "filament_density": ["1.24"] * len(palette),
-        "filament_diameter": ["1.75"] * len(palette),
-        "filament_map": list(range(1, len(palette) + 1)),
-        "filament_volume_map": [0] * len(palette),
-        "filament_self_index": list(range(1, len(palette) + 1)),
-    })
+    cut_information = (
+        '<?xml version="1.0" encoding="UTF-8"?><cut_information>'
+        + "".join(
+            f'<object id="{index}"><cut_id id="0" check_sum="1" connectors_cnt="0"/></object>'
+            for index in range(1, len(object_files) + 1)
+        )
+        + '</cut_information>'
+    )
     slice_info = (
         '<?xml version="1.0" encoding="UTF-8"?><config><header>'
         '<header_item key="X-BBL-Client-Type" value="slicer"/>'
-        '<header_item key="X-BBL-Client-Version" value="02.06.00.51"/>'
+        '<header_item key="X-BBL-Client-Version" value="02.00.03.54"/>'
         '</header></config>'
     )
     content_types = (
@@ -460,22 +521,24 @@ def write_bambu_multi_plate_3mf(
         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
         '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
         '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>'
-        '<Default Extension="config" ContentType="text/xml"/></Types>'
-    )
-    rels = (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        '<Relationship Target="/3D/3dmodel.model" Id="rel-1" '
-        'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
-        '</Relationships>'
+        '<Default Extension="png" ContentType="image/png"/>'
+        '<Default Extension="gcode" ContentType="text/x.gcode"/>'
+        '</Types>'
     )
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", content_types)
         archive.writestr("_rels/.rels", rels)
         archive.writestr("3D/3dmodel.model", model_xml)
-        archive.writestr("Metadata/project_settings.config", project_settings)
+        archive.writestr("3D/_rels/3dmodel.model.rels", model_rels)
+        for filename, model in object_files:
+            archive.writestr(filename, model)
         archive.writestr("Metadata/model_settings.config", model_settings)
+        archive.writestr(
+            "Metadata/project_settings.config",
+            json.dumps(project_cfg, ensure_ascii=False, indent=4),
+        )
         archive.writestr("Metadata/slice_info.config", slice_info)
+        archive.writestr("Metadata/cut_information.xml", cut_information)
 
 
 # --------------------------------------------------------------------------- #
