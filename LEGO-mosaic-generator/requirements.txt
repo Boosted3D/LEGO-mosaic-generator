@@ -1,0 +1,5 @@
+numpy>=1.24
+Pillow>=10.1
+streamlit>=1.30
+# Optioneel (niet nodig: STL/OBJ/3MF-I/O is zelf geïmplementeerd):
+# trimesh
