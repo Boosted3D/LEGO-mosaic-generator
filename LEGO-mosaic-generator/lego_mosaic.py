@@ -857,8 +857,9 @@ def generate(image_source, out_dir: str | Path = "output",
     res.files["spare_3mf"] = mc_files
     res.files["spare_stl"] = stl_files
 
-    # A color-specific print plate containing exactly the studs used in the
-    # mosaic. Large counts are split across bed-sized files for safe printing.
+    # Export optional color-specific stud plates as standalone files. Keep
+    # these out of the multi-plate Bambu project: that project should contain
+    # only the mosaic baseplate tile(s), with each color grouped in-place.
     color_plate_files: list[Path] = []
     for i, (c, row) in enumerate(zip(palette, res.bom)):
         needed = row["needed"]
@@ -867,8 +868,6 @@ def generate(image_source, out_dir: str | Path = "output",
             name = f"plate_{c.code}_{_filename_slug(c.name_en)}_bed{b:02d}"
             obj = PrintObject(f"Studs {c.name_en}", tile_mesh(stud, pos), c.rgb,
                               filament_slot(c.code))
-            plate_name = c.name_en if len(beds) == 1 else f"{c.name_en} bed {b}"
-            project_plates.append((plate_name, [obj]))
             p3mf, pstl = out / f"{name}.3mf", out / f"{name}.stl"
             write_3mf(p3mf, [obj], f"{c.name_en} plate ({len(pos)} studs)")
             write_stl(obj.mesh, pstl)
