@@ -20,7 +20,7 @@ def get_output_dir() -> Path:
         st.session_state["output_dir"] = tempfile.mkdtemp(prefix="lego-mosaic-")
     return Path(st.session_state["output_dir"])
 
-st.set_page_config(page_title="LEGO Mosaic → 3D Print", page_icon="🧱", layout="wide")
+st.set_page_config(page_title="LEGO Mosaic → 3D Print", layout="wide")
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -34,10 +34,40 @@ html, body, [class*="css"] { font-family: Inter, ui-sans-serif, system-ui, sans-
 [data-testid="stFileUploader"] section { border: 1px dashed #424854; border-radius: 14px; background: #111318; }
 .result-meta { color: #aeb5c0; background: #15181f; border: 1px solid #2d313a; border-radius: 999px; padding: 6px 12px; display: inline-block; font-size: .86rem; }
 .swatch-dot { width: 16px; height: 16px; border-radius: 50%; display: inline-block; border: 1px solid #ffffff55; vertical-align: -3px; margin-right: 8px; }
+.app-header { display:flex; justify-content:space-between; align-items:center; gap:24px; margin:12px 0 30px; }
+.brand-lockup { display:flex; align-items:center; gap:16px; min-width:0; }
+.brand-mark { width:54px; height:54px; flex:none; }
+.brand-copy h1 { margin:0; font-size:clamp(1.8rem,3vw,2.55rem); line-height:1.15; font-weight:700; letter-spacing:-.045em; color:#f4f6f8; }
+.title-arrow { width:.78em; height:.78em; vertical-align:-.04em; fill:none; stroke:#aab3bd; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.brand-copy p { margin:8px 0 0; color:#888; font-size:.88rem; }
+.engine-badge { display:flex; align-items:center; gap:8px; white-space:nowrap; padding:8px 12px; border:1px solid #273a30; border-radius:999px; background:#111a15; color:#c7d7cd; font-size:.78rem; }
+.engine-badge span { width:7px; height:7px; border-radius:50%; background:#00ae42; box-shadow:0 0 10px #00ae4280; }
+@media (max-width:700px) { .app-header { align-items:flex-start; flex-direction:column; } .brand-mark { width:42px; height:42px; } }
 </style>
 """, unsafe_allow_html=True)
-st.title("🧱 LEGO Mosaic → Bambu Lab 3D Print")
-st.caption("Upload an image and choose color or grayscale. The default format is 48×48 studs, split into four 24×24 tiles.")
+st.markdown("""
+<header class="app-header">
+  <div class="brand-lockup">
+    <svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Four-stud mosaic logo">
+      <defs>
+        <linearGradient id="studGradient" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#51d98a"/><stop offset="100%" stop-color="#00AE42"/>
+        </linearGradient>
+      </defs>
+      <rect x="7" y="18" width="50" height="39" rx="9" fill="#151a20" stroke="#3b4650" stroke-width="2"/>
+      <rect x="12" y="10" width="17" height="17" rx="5" fill="url(#studGradient)"/>
+      <rect x="35" y="10" width="17" height="17" rx="5" fill="url(#studGradient)"/>
+      <rect x="12" y="33" width="17" height="17" rx="5" fill="url(#studGradient)"/>
+      <rect x="35" y="33" width="17" height="17" rx="5" fill="url(#studGradient)"/>
+    </svg>
+    <div class="brand-copy">
+      <h1>LEGO Mosaic <svg class="title-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg> Bambu Lab 3D Print</h1>
+      <p>Upload an image and choose color or grayscale. Default format: 48×48 studs, split into four 24×24 tiles.</p>
+    </div>
+  </div>
+  <div class="engine-badge"><span></span>Engine Online</div>
+</header>
+""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Settings")
