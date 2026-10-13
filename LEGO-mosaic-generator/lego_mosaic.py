@@ -27,6 +27,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 PITCH_MM = 8.0       # LEGO stud pitch
 BED_MM = 256.0       # Bambu Lab print bed (A1/P1/X1: 256 x 256 mm)
 EDGE_MARGIN_MM = 5.0 # Keep every plate at least this far from printable-area edges
+MIN_STUD_GAP_MM = 2.0 # Minimum clear horizontal space between separate studs
 SUPPORTED_IMAGES = {".jpg", ".jpeg", ".png"}
 
 
@@ -97,7 +98,7 @@ class Options:
     dither: bool = False               # Floyd-Steinberg dithering
     autocontrast: bool = True          # stretch histogram for better results
     loose_include_needed: bool = False  # loose studs: reserve only (False) or all (True)
-    loose_spacing: float = 9.0         # center-to-center distance loose studs (mm)
+    loose_spacing: float = 10.0        # preferred center-to-center distance for loose studs (mm)
     bed_margin: float = EDGE_MARGIN_MM # free margin on print bed (mm)
     rotation_degrees: int = 0          # selected plate orientation, applied before fit checks
     scale_to_fit: bool = False         # explicit opt-in; never scale silently
@@ -823,6 +824,14 @@ def _profile_safe_positions(
     stud_min, stud_max = stud_mesh.bounds()
     half_x = float((stud_max[0] - stud_min[0]) / 2.0)
     half_y = float((stud_max[1] - stud_min[1]) / 2.0)
+    # Enforce the requested physical clearance even if a caller passes an old
+    # spacing value or uses a stud mesh wider than the bundled 7.62 mm model.
+    # A small epsilon avoids rounding the exported coordinates below 2.00 mm.
+    spacing = max(
+        float(spacing),
+        float(max(stud_max[0] - stud_min[0], stud_max[1] - stud_min[1]))
+        + MIN_STUD_GAP_MM + 0.02,
+    )
 
     safe_min_x, safe_max_x = printable_min_x + edge_margin, printable_max_x - edge_margin
     safe_min_y, safe_max_y = printable_min_y + edge_margin, printable_max_y - edge_margin

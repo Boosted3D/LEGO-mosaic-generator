@@ -116,6 +116,7 @@ with st.sidebar:
     st.markdown('<hr class="sidebar-rule"><div class="sidebar-section-title">03 &nbsp; PRINT INSTELLINGEN</div>', unsafe_allow_html=True)
     auto = st.checkbox("Auto-enhance contrast", value=True)
     loose_all = st.checkbox("Include loose studs (needed + reserve)", value=True)
+    st.caption(f"Minimum space between studs: {L.MIN_STUD_GAP_MM:.1f} mm")
     edge_margin = st.number_input("Edge margin (mm)", min_value=0.0, max_value=50.0,
                                   value=float(L.EDGE_MARGIN_MM), step=0.5)
     rotation = st.selectbox("Plate rotation", [0, 90, 180, 270], index=0,
