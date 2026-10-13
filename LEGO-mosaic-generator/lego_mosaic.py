@@ -331,7 +331,10 @@ def write_3mf(path: Path, objects: list[PrintObject], title: str = "LEGO mosaic"
 
 
 def write_bambu_multi_plate_3mf(
-    path: Path, plates: list[tuple[str, list[PrintObject]]], title: str = "LEGO mosaic"
+    path: Path,
+    plates: list[tuple[str, list[PrintObject]]],
+    title: str = "LEGO mosaic",
+    palette: tuple[LegoColor, ...] = COLOR_PALETTE,
 ) -> None:
     """Write one Bambu Studio project with the supplied objects on named plates."""
     plates = [(name, objects) for name, objects in plates if objects]
@@ -341,11 +344,14 @@ def write_bambu_multi_plate_3mf(
     def xml_attr(value: str) -> str:
         return escape(value, {'"': "&quot;"})
 
-    plate_cols = max(1, math.floor(math.sqrt(len(plates)) + 0.5))
-    if math.sqrt(len(plates)) > plate_cols:
-        plate_cols += 1
-    plate_stride = BED_MM * 1.2
+    # Seed the material table from the complete app palette so colors do not
+    # disappear when a particular image happens not to use them.
     materials: list[tuple[str, tuple[int, int, int]]] = []
+    material_index_by_rgb: dict[tuple[int, int, int], int] = {}
+    for color in palette:
+        if color.rgb not in material_index_by_rgb:
+            material_index_by_rgb[color.rgb] = len(materials)
+            materials.append((color.name_en, color.rgb))
     objects_xml: list[str] = []
     builds_xml: list[str] = []
     settings_objects: list[str] = []
@@ -353,14 +359,13 @@ def write_bambu_multi_plate_3mf(
     object_id = 2
 
     for plate_index, (plate_name, print_objects) in enumerate(plates):
-        row, col = divmod(plate_index, plate_cols)
-        offset_x, offset_y = col * plate_stride, -row * plate_stride
         instance_xml: list[str] = []
         for print_object in print_objects:
-            material = (print_object.name, print_object.rgb)
-            if material not in materials:
-                materials.append(material)
-            material_index = materials.index(material)
+            if print_object.rgb not in material_index_by_rgb:
+                raise MosaicError(
+                    f"Object '{print_object.name}' uses a color outside the project palette."
+                )
+            material_index = material_index_by_rgb[print_object.rgb]
             obj_uuid, item_uuid = str(uuid.uuid4()), str(uuid.uuid4())
             vertices = print_object.mesh.vertices
             faces = print_object.mesh.faces
@@ -382,7 +387,7 @@ def write_bambu_multi_plate_3mf(
             )
             builds_xml.append(
                 f'<item objectid="{object_id}" p:UUID="{item_uuid}" '
-                f'transform="1 0 0 0 1 0 0 0 1 {offset_x:.4f} {offset_y:.4f} 0" printable="1"/>'
+                'transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/>'
             )
             settings_objects.append(
                 f'<object id="{object_id}"><metadata key="name" value="{xml_attr(print_object.name)}"/>'
@@ -426,9 +431,9 @@ def write_bambu_multi_plate_3mf(
         "from": "project",
         "type": "process",
         "name": title,
-        "filament_colour": [color.hex for color in COLOR_PALETTE],
-        "filament_type": ["PLA"] * len(COLOR_PALETTE),
-        "filament_vendor": ["Generic"] * len(COLOR_PALETTE),
+        "filament_colour": [color.hex for color in palette],
+        "filament_type": ["PLA"] * len(palette),
+        "filament_vendor": ["Generic"] * len(palette),
     })
     slice_info = (
         '<?xml version="1.0" encoding="UTF-8"?><config><header>'
@@ -592,6 +597,82 @@ def loose_positions(count: int, stud_w: float, o: Options) -> list[np.ndarray]:
         y = y0 + (j // cols) * o.loose_spacing
         beds.append(np.column_stack([x, y, np.zeros(k)]))
     return beds
+
+
+def build_color_grouped_plates(
+    idx: np.ndarray,
+    stud: Mesh,
+    o: Options,
+    palette: tuple[LegoColor, ...],
+    *,
+    max_studs_per_plate: int = 16 * 16,
+) -> list[tuple[str, list[PrintObject]]]:
+    """Group studs into compact color panels and pack panels onto print beds."""
+    if max_studs_per_plate <= 0:
+        raise MosaicError("Maximum studs per color plate must be positive.")
+    bed_usable = o.bed - 2 * o.bed_margin
+    max_grid_side = int(bed_usable // o.pitch)
+    if max_grid_side < 1:
+        raise MosaicError("Print bed is too small for one stud.")
+    max_studs_per_plate = min(max_studs_per_plate, max_grid_side * max_grid_side)
+
+    spacing = max(2.0, o.pitch * 0.5)
+    bed_objects: list[list[PrintObject]] = [[]]
+    x_cursor = o.bed_margin
+    y_cursor = o.bed_margin
+    row_height = 0.0
+
+    for color_index, color in enumerate(palette):
+        stud_count = int(np.count_nonzero(idx == color_index))
+        if not stud_count:
+            continue
+
+        plate_count = math.ceil(stud_count / max_studs_per_plate)
+        base_count, remainder = divmod(stud_count, plate_count)
+        color_plate_number = 0
+
+        for plate_index in range(plate_count):
+            count = base_count + (1 if plate_index < remainder else 0)
+            columns = min(max_grid_side, math.ceil(math.sqrt(count)))
+            rows = math.ceil(count / columns)
+            if rows > max_grid_side:
+                raise MosaicError("A color group cannot fit within the configured print bed.")
+
+            grid_width = columns * o.pitch
+            grid_height = rows * o.pitch
+            if x_cursor + grid_width > o.bed - o.bed_margin:
+                x_cursor = o.bed_margin
+                y_cursor += row_height + spacing
+                row_height = 0.0
+            if y_cursor + grid_height > o.bed - o.bed_margin:
+                if not bed_objects[-1]:
+                    raise MosaicError("A color panel cannot fit within the configured print bed.")
+                bed_objects.append([])
+                x_cursor = o.bed_margin
+                y_cursor = o.bed_margin
+                row_height = 0.0
+
+            positions = np.column_stack((
+                x_cursor + (np.arange(count) % columns) * o.pitch + o.pitch / 2,
+                y_cursor + (np.arange(count) // columns) * o.pitch + o.pitch / 2,
+                np.zeros(count, dtype=float),
+            ))
+            color_plate_number += 1
+            obj = PrintObject(
+                f"Studs {color.name_en} - Plate {color_plate_number} of {plate_count}",
+                tile_mesh(stud, positions),
+                color.rgb,
+                filament_slot(color.code),
+            )
+            bed_objects[-1].append(obj)
+            x_cursor += grid_width + spacing
+            row_height = max(row_height, grid_height)
+
+    return [
+        (f"Color print plate {index + 1}", objects)
+        for index, objects in enumerate(bed_objects)
+        if objects
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -870,17 +951,22 @@ def generate(image_source, out_dir: str | Path = "output",
             name = f"plate_{c.code}_{_filename_slug(c.name_en)}_bed{b:02d}"
             obj = PrintObject(f"Studs {c.name_en}", tile_mesh(stud, pos), c.rgb,
                               filament_slot(c.code))
-            if o.palette_mode == "color":
-                plate_name = c.name_en if len(beds) == 1 else f"{c.name_en} - Plate {b}"
-                project_plates.append((plate_name, [obj]))
             p3mf, pstl = out / f"{name}.3mf", out / f"{name}.stl"
             write_3mf(p3mf, [obj], f"{c.name_en} plate ({len(pos)} studs)")
             write_stl(obj.mesh, pstl)
             color_plate_files.extend([p3mf, pstl])
     res.files["color_plates"] = color_plate_files
 
+    if o.palette_mode == "color":
+        project_plates = build_color_grouped_plates(idx, stud, o, palette)
+
     project_path = out / "lego_mosaic_bambu_project.3mf"
-    write_bambu_multi_plate_3mf(project_path, project_plates, f"LEGO Mosaic {o.grid}x{o.grid}")
+    write_bambu_multi_plate_3mf(
+        project_path,
+        project_plates,
+        f"LEGO Mosaic {o.grid}x{o.grid}",
+        palette=COLOR_PALETTE,
+    )
     res.files["bambu_project"] = [project_path]
     res.project_plate_names = [name for name, objects in project_plates if objects]
 
