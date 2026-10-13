@@ -116,6 +116,12 @@ with st.sidebar:
     st.markdown('<hr class="sidebar-rule"><div class="sidebar-section-title">03 &nbsp; PRINT INSTELLINGEN</div>', unsafe_allow_html=True)
     auto = st.checkbox("Auto-enhance contrast", value=True)
     loose_all = st.checkbox("Include loose studs (needed + reserve)", value=True)
+    edge_margin = st.number_input("Edge margin (mm)", min_value=0.0, max_value=50.0,
+                                  value=float(L.EDGE_MARGIN_MM), step=0.5)
+    rotation = st.selectbox("Plate rotation", [0, 90, 180, 270], index=0,
+                            format_func=lambda degrees: f"{degrees}°")
+    scale_to_fit = st.checkbox("Uniformly scale plates to fit", value=False,
+                               help="Only scale if you explicitly turn this on. All plates use the same X/Y scale.")
 
 st.markdown('''
 <div class="upload-copy">
@@ -137,7 +143,9 @@ if upload is not None:
     if st.button("Generate mosaic", type="primary"):
         opts = L.Options(grid=grid_size, palette_mode=palette_mode,
                          selected_colors=selected_colors, reserve_pct=reserve,
-                         dither=False, autocontrast=auto, loose_include_needed=loose_all)
+                         dither=False, autocontrast=auto, loose_include_needed=loose_all,
+                         bed_margin=edge_margin, rotation_degrees=rotation,
+                         scale_to_fit=scale_to_fit)
         try:
             with st.spinner("Generating (3D files may take a moment)…"):
                 res = L.generate(io.BytesIO(upload.getvalue()), get_output_dir(), options=opts)
@@ -156,13 +164,12 @@ if res:
     for w in res.warnings:
         st.warning(w)
     st.markdown(f'<div class="result-meta">✓ Mosaic ready&nbsp;&nbsp;·&nbsp;&nbsp;{len(res.project_plate_names)} print plates</div>', unsafe_allow_html=True)
-    if res.excluded_cells:
-        st.warning("Some studs were omitted to respect the printer bed and exclusion area.")
-        for entry in res.excluded_cells:
-            cells = ", ".join(f"R{row}C{col}" for row, col in entry["cells"])
-            st.caption(f'{entry["plate"]} ({entry["color"]}): {cells}')
-    else:
-        st.caption("Excluded cells: none. All exported studs fit the selected printer profile.")
+    if res.uniform_scale < 1.0:
+        st.info(res.warnings[-1])
+    with st.expander("Print plate fit and edge clearance"):
+        st.caption(f"Required edge margin: {edge_margin:g} mm · rotation: {rotation}°")
+        for item in res.plate_edge_clearance:
+            st.write(f"{item['plate']}: {item['clearance_mm']:.2f} mm")
     preview_col, bom_col = st.columns([1.25, 1], gap="large")
     with preview_col:
         with st.container(border=True):
