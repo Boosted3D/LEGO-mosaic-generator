@@ -22,6 +22,14 @@ with st.sidebar:
     st.header("Settings")
     mode_label = st.radio("Palette", ["Kleur", "Grijstinten"], horizontal=True)
     palette_mode = "color" if mode_label == "Kleur" else "grayscale"
+    selected_colors = None
+    if palette_mode == "color":
+        all_codes = [color.code for color in L.COLOR_PALETTE]
+        selected_colors = tuple(st.multiselect(
+            "Colors to use", all_codes, default=all_codes,
+            format_func=lambda code: next(color.name_en for color in L.COLOR_PALETTE if color.code == code),
+            help="The mosaic will use only the colors selected here.",
+        ))
     grid_size = st.selectbox("Format", [48, 30], index=0,
                              format_func=lambda x: f"{x}×{x} studs" + (" (1 plate)" if x == 30 else " (4 separate tiles of 24×24)"))
     reserve = st.number_input("Reserve (%)", 0.0, 100.0, 5.0, 1.0)
@@ -31,9 +39,8 @@ with st.sidebar:
                             format_func=lambda c: next(p.name_en for p in L.GRAYSCALE_PALETTE if p.code == c))
     else:
         thickness, base = 1.6, "BK"
-    dither = st.checkbox("Dithering (Floyd-Steinberg)", value=False)
     auto = st.checkbox("Auto-enhance contrast", value=True)
-    loose_all = st.checkbox("Loose studs = needed + reserve", value=False)
+    loose_all = st.checkbox("Include loose studs (needed + reserve)", value=True)
 
 upload = st.file_uploader("Image (JPG/PNG)", type=["jpg", "jpeg", "png"])
 
@@ -44,9 +51,10 @@ if upload is not None:
         st.error(str(exc))
         st.stop()
     if st.button("Generate mosaic", type="primary"):
-        opts = L.Options(grid=grid_size, palette_mode=palette_mode, reserve_pct=reserve,
+        opts = L.Options(grid=grid_size, palette_mode=palette_mode,
+                         selected_colors=selected_colors, reserve_pct=reserve,
                          plate_thickness=thickness, base_color=base,
-                         dither=dither, autocontrast=auto, loose_include_needed=loose_all)
+                         dither=False, autocontrast=auto, loose_include_needed=loose_all)
         try:
             with st.spinner("Generating (3D files may take a moment)…"):
                 res = L.generate(io.BytesIO(upload.getvalue()), get_output_dir(), options=opts)

@@ -64,9 +64,12 @@ GRAYSCALE_PALETTE: tuple[LegoColor, ...] = tuple(
 PALETTE: tuple[LegoColor, ...] = COLOR_PALETTE
 
 
-def palette_for_mode(mode: str) -> tuple[LegoColor, ...]:
+def palette_for_mode(mode: str, selected_colors: tuple[str, ...] | None = None) -> tuple[LegoColor, ...]:
     if mode == "color":
-        return COLOR_PALETTE
+        if selected_colors is None:
+            return COLOR_PALETTE
+        selected = set(selected_colors)
+        return tuple(color for color in COLOR_PALETTE if color.code in selected)
     if mode == "grayscale":
         return GRAYSCALE_PALETTE
     raise MosaicError(f"Unknown palette mode '{mode}'.")
@@ -76,6 +79,7 @@ def palette_for_mode(mode: str) -> tuple[LegoColor, ...]:
 class Options:
     grid: int = 48                     # 30 or 48
     palette_mode: str = "color"        # "color" or "grayscale"
+    selected_colors: tuple[str, ...] | None = None  # None means all colors
     pitch: float = PITCH_MM
     bed: float = BED_MM
     reserve_pct: float = 5.0           # extra studs in percentage
@@ -585,7 +589,9 @@ class Result:
 
 
 def _validate(o: Options) -> None:
-    palette = palette_for_mode(o.palette_mode)
+    palette = palette_for_mode(o.palette_mode, o.selected_colors)
+    if o.palette_mode == "color" and not palette:
+        raise MosaicError("Select at least one color to generate the mosaic.")
     if o.palette_mode == "grayscale" and o.base_color not in {c.code for c in palette}:
         raise MosaicError(f"Unknown base color '{o.base_color}'.")
     if o.reserve_pct < 0:
@@ -603,7 +609,7 @@ def generate(image_source, out_dir: str | Path = "output",
              assets_dir: str | Path | None = None, options: Options | None = None) -> Result:
     o = options or Options()
     _validate(o)
-    palette = palette_for_mode(o.palette_mode)
+    palette = palette_for_mode(o.palette_mode, o.selected_colors)
     here = Path(__file__).resolve().parent
     assets = Path(assets_dir) if assets_dir else here / "assets"
     out = Path(out_dir)
