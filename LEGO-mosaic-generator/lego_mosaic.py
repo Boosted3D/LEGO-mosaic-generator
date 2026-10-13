@@ -357,13 +357,28 @@ def write_bambu_multi_plate_3mf(
     settings_objects: list[str] = []
     plate_xml: list[str] = []
     object_id = 2
+    plate_columns = math.ceil(math.sqrt(len(plates)))
+    plate_stride = BED_MM * 1.2
 
     for plate_index, (plate_name, print_objects) in enumerate(plates):
+        # Bambu Studio determines logical plates from each object's world-space
+        # bounds. Keep each plate's meshes inside a separate virtual bed cell.
+        plate_x = (plate_index % plate_columns) * plate_stride
+        plate_y = -(plate_index // plate_columns) * plate_stride
         instance_xml: list[str] = []
+        # Keep a complete, 1-based identity map for each plate. Bambu Studio
+        # uses the map together with each model object's `extruder` metadata.
+        filament_map = " ".join(str(slot) for slot in range(1, len(palette) + 1))
+        filament_volume_map = " ".join("0" for _ in palette)
         for print_object in print_objects:
             if print_object.rgb not in material_index_by_rgb:
                 raise MosaicError(
                     f"Object '{print_object.name}' uses a color outside the project palette."
+                )
+            if not 1 <= print_object.extruder <= len(palette):
+                raise MosaicError(
+                    f"Object '{print_object.name}' references filament slot "
+                    f"{print_object.extruder}, but the project defines {len(palette)} slots."
                 )
             material_index = material_index_by_rgb[print_object.rgb]
             obj_uuid, item_uuid = str(uuid.uuid4()), str(uuid.uuid4())
@@ -387,7 +402,8 @@ def write_bambu_multi_plate_3mf(
             )
             builds_xml.append(
                 f'<item objectid="{object_id}" p:UUID="{item_uuid}" '
-                'transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/>'
+                f'transform="1 0 0 0 1 0 0 0 1 {plate_x:.4f} {plate_y:.4f} 0" '
+                'printable="1"/>'
             )
             settings_objects.append(
                 f'<object id="{object_id}"><metadata key="name" value="{xml_attr(print_object.name)}"/>'
@@ -406,6 +422,9 @@ def write_bambu_multi_plate_3mf(
             f'<plate><metadata key="plater_id" value="{plate_index + 1}"/>'
             f'<metadata key="plater_name" value="{xml_attr(safe_name)}"/>'
             '<metadata key="locked" value="false"/>'
+            '<metadata key="filament_map_mode" value="Manual"/>'
+            f'<metadata key="filament_maps" value="{filament_map}"/>'
+            f'<metadata key="filament_volume_maps" value="{filament_volume_map}"/>'
             f'{"".join(instance_xml)}</plate>'
         )
 
@@ -427,13 +446,25 @@ def write_bambu_multi_plate_3mf(
         '<?xml version="1.0" encoding="UTF-8"?><config>'
         f'{"".join(settings_objects)}{"".join(plate_xml)}</config>'
     )
+    # Define every app color as an actual project filament slot. Base-material
+    # colors only affect model display; Bambu assigns printable colors through
+    # these slots and each object's `extruder` setting above.
     project_settings = json.dumps({
         "from": "project",
         "type": "process",
         "name": title,
+        "version": "02.06.00.51",
         "filament_colour": [color.hex for color in palette],
+        "filament_multi_colour": [color.hex for color in palette],
+        "filament_colour_type": ["1"] * len(palette),
+        "filament_settings_id": [""] * len(palette),
         "filament_type": ["PLA"] * len(palette),
         "filament_vendor": ["Generic"] * len(palette),
+        "filament_ids": ["GFL99"] * len(palette),
+        "filament_density": ["1.24"] * len(palette),
+        "filament_diameter": ["1.75"] * len(palette),
+        "filament_map": list(range(1, len(palette) + 1)),
+        "filament_volume_map": [0] * len(palette),
     })
     slice_info = (
         '<?xml version="1.0" encoding="UTF-8"?><config><header>'
