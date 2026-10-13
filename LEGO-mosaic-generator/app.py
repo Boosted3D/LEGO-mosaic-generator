@@ -113,12 +113,16 @@ with st.sidebar:
     grid_size = st.selectbox("Format", [24, 30, 48, 60], index=2,
                              format_func=lambda x: f"{x}×{x} studs" + (f" (4 tiles of {x // 2}×{x // 2})" if x in (48, 60) else " (1 plate)"))
     reserve = st.number_input("Reserve (%)", 0.0, 100.0, 5.0, 1.0)
+    base = st.selectbox(
+        "Baseplate color",
+        [c.code for c in L.COLOR_PALETTE],
+        index=next(i for i, c in enumerate(L.COLOR_PALETTE) if c.code == "BK"),
+        format_func=lambda code: next(c.name_en for c in L.COLOR_PALETTE if c.code == code),
+    )
     if palette_mode == "grayscale":
         thickness = st.number_input("Baseplate thickness (mm)", 0.4, 10.0, 1.6, 0.2)
-        base = st.selectbox("Baseplate color", [c.code for c in L.GRAYSCALE_PALETTE],
-                            format_func=lambda c: next(p.name_en for p in L.GRAYSCALE_PALETTE if p.code == c))
     else:
-        thickness, base = 1.6, "BK"
+        thickness = 1.6
     st.markdown('<hr class="sidebar-rule"><div class="sidebar-section-title">03 &nbsp; PRINT INSTELLINGEN</div>', unsafe_allow_html=True)
     auto = st.checkbox("Auto-enhance contrast", value=True)
     loose_all = st.checkbox("Include loose studs (needed + reserve)", value=True)
@@ -172,26 +176,44 @@ if res:
         with st.container(border=True):
             st.subheader("Parts overview")
             table_rows = []
+            baseplate_color = getattr(res, "baseplate_color", None) or next(
+                color for color in L.COLOR_PALETTE if color.code == "BK"
+            )
+            baseplate_count = getattr(res, "baseplate_count", 0)
             for row in res.bom:
                 rgb = row["rgb"]
                 swatch = "#%02X%02X%02X" % tuple(rgb)
                 code = html.escape(row["code"])
+                baseplates = baseplate_count if row["code"] == baseplate_color.code else 0
+                total = row["needed"] + row["reserve_extra"] + baseplates
                 table_rows.append(
                     "<tr>"
                     f'<td><span class="swatch-dot" style="background:{swatch}"></span>{code}</td>'
-                    f'<td>{row["needed"]}</td><td>{row["reserve_extra"]}</td><td>{row["total_to_print"]}</td>'
+                    f'<td>{row["needed"]}</td><td>{baseplates}</td>'
+                    f'<td>{row["reserve_extra"]}</td><td>{total}</td>'
+                    "</tr>"
+                )
+            if baseplate_color.code not in {row["code"] for row in res.bom}:
+                swatch = baseplate_color.hex
+                code = html.escape(baseplate_color.code)
+                table_rows.append(
+                    "<tr>"
+                    f'<td><span class="swatch-dot" style="background:{swatch}"></span>{code}</td>'
+                    f'<td>0</td><td>{baseplate_count}</td><td>0</td><td>{baseplate_count}</td>'
                     "</tr>"
                 )
             total_needed = sum(row["needed"] for row in res.bom)
             total_reserve = sum(row["reserve_extra"] for row in res.bom)
+            total_pieces = total_needed + total_reserve + baseplate_count
             table_html = (
                 '<table style="width:100%;border-collapse:collapse;font-size:.9rem">'
                 '<thead><tr style="color:#9299a6;text-align:left;border-bottom:1px solid #2d313a">'
-                '<th style="padding:8px 4px">Color</th><th>Needed</th><th>Reserve</th><th>Total</th></tr></thead>'
+                '<th style="padding:8px 4px">Color</th><th>Studs</th><th>Baseplates</th>'
+                '<th>Reserve</th><th>Total pieces</th></tr></thead>'
                 f'<tbody>{"".join(table_rows)}</tbody>'
                 '<tfoot><tr style="border-top:1px solid #2d313a;font-weight:600">'
-                f'<td style="padding:10px 4px">Total</td><td>{total_needed}</td><td>{total_reserve}</td>'
-                f'<td>{total_needed + total_reserve}</td></tr></tfoot></table>'
+                f'<td style="padding:10px 4px">Total</td><td>{total_needed}</td><td>{baseplate_count}</td>'
+                f'<td>{total_reserve}</td><td>{total_pieces}</td></tr></tfoot></table>'
             )
             st.markdown(table_html, unsafe_allow_html=True)
     with st.expander("Building instructions"):
