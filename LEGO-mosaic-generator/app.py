@@ -1,5 +1,6 @@
 """Streamlit interface for the LEGO mosaic generator."""
 import io
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -7,7 +8,11 @@ import streamlit as st
 
 import lego_mosaic as L
 
-OUTPUT_DIR = Path(__file__).resolve().parent / "output"
+def get_output_dir() -> Path:
+    """Use a writable, isolated output directory for each browser session."""
+    if "output_dir" not in st.session_state:
+        st.session_state["output_dir"] = tempfile.mkdtemp(prefix="lego-mosaic-")
+    return Path(st.session_state["output_dir"])
 
 st.set_page_config(page_title="LEGO Mosaic → 3D Print", page_icon="🧱", layout="wide")
 st.title("🧱 LEGO Mosaic → Bambu Lab 3D Print")
@@ -44,12 +49,13 @@ if upload is not None:
                          dither=dither, autocontrast=auto, loose_include_needed=loose_all)
         try:
             with st.spinner("Generating (3D files may take a moment)…"):
-                res = L.generate(io.BytesIO(upload.getvalue()), OUTPUT_DIR, options=opts)
+                res = L.generate(io.BytesIO(upload.getvalue()), get_output_dir(), options=opts)
         except L.MosaicError as exc:
             st.error(str(exc))
             st.stop()
         except Exception as exc:
             st.error(f"Unexpected error: {exc!r}")
+            st.exception(exc)
             st.stop()
         st.session_state["res"] = res
         st.session_state["palette_mode"] = palette_mode
