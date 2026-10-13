@@ -11,6 +11,7 @@ import math
 import re
 import struct
 import sys
+import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -321,6 +322,128 @@ def write_3mf(path: Path, objects: list[PrintObject], title: str = "LEGO mosaic"
         z.writestr("Metadata/model_settings.config", "".join(cfg))
 
 
+def write_bambu_multi_plate_3mf(
+    path: Path, plates: list[tuple[str, list[PrintObject]]], title: str = "LEGO mosaic"
+) -> None:
+    """Write one Bambu Studio project with the supplied objects on named plates."""
+    plates = [(name, objects) for name, objects in plates if objects]
+    if not plates:
+        raise MosaicError("No print plates were generated.")
+
+    def xml_attr(value: str) -> str:
+        return escape(value, {'"': "&quot;"})
+
+    plate_cols = max(1, math.floor(math.sqrt(len(plates)) + 0.5))
+    if math.sqrt(len(plates)) > plate_cols:
+        plate_cols += 1
+    plate_stride = BED_MM * 1.2
+    materials: list[tuple[str, tuple[int, int, int]]] = []
+    objects_xml: list[str] = []
+    builds_xml: list[str] = []
+    settings_objects: list[str] = []
+    plate_xml: list[str] = []
+    object_id = 2
+
+    for plate_index, (plate_name, print_objects) in enumerate(plates):
+        row, col = divmod(plate_index, plate_cols)
+        offset_x, offset_y = col * plate_stride, -row * plate_stride
+        instance_xml: list[str] = []
+        for print_object in print_objects:
+            material = (print_object.name, print_object.rgb)
+            if material not in materials:
+                materials.append(material)
+            material_index = materials.index(material)
+            obj_uuid, item_uuid = str(uuid.uuid4()), str(uuid.uuid4())
+            vertices = print_object.mesh.vertices
+            faces = print_object.mesh.faces
+            mesh_xml = ["      <mesh><vertices>"]
+            mesh_xml.extend(
+                f'<vertex x="{x:.4f}" y="{y:.4f}" z="{z:.4f}"/>'
+                for x, y, z in vertices
+            )
+            mesh_xml.append("</vertices><triangles>")
+            mesh_xml.extend(
+                f'<triangle v1="{a}" v2="{b}" v3="{c}"/>'
+                for a, b, c in faces
+            )
+            mesh_xml.append("</triangles></mesh>")
+            objects_xml.append(
+                f'<object id="{object_id}" name="{escape(print_object.name)}" '
+                f'type="model" pid="1" pindex="{material_index}" p:UUID="{obj_uuid}">'
+                f'{"".join(mesh_xml)}</object>'
+            )
+            builds_xml.append(
+                f'<item objectid="{object_id}" p:UUID="{item_uuid}" '
+                f'transform="1 0 0 0 1 0 0 0 1 {offset_x:.4f} {offset_y:.4f} 0" printable="1"/>'
+            )
+            settings_objects.append(
+                f'<object id="{object_id}"><metadata key="name" value="{xml_attr(print_object.name)}"/>'
+                '<metadata key="extruder" value="1"/></object>'
+            )
+            instance_xml.append(
+                '<model_instance>'
+                f'<metadata key="object_id" value="{object_id}"/>'
+                '<metadata key="instance_id" value="0"/>'
+                '</model_instance>'
+            )
+            object_id += 1
+
+        safe_name = re.sub(r'[<>:/\\|?*"]', "-", plate_name).strip() or f"Plate {plate_index + 1}"
+        plate_xml.append(
+            f'<plate><metadata key="plater_id" value="{plate_index + 1}"/>'
+            f'<metadata key="plater_name" value="{xml_attr(safe_name)}"/>'
+            '<metadata key="locked" value="false"/>'
+            f'{"".join(instance_xml)}</plate>'
+        )
+
+    material_xml = [f'<base name="{escape(name)}" displaycolor="#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}FF"/>'
+                    for name, rgb in materials]
+    model_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<model unit="millimeter" xml:lang="en-US" '
+        'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
+        'xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" '
+        'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p">'
+        f'<metadata name="Title">{escape(title)}</metadata>'
+        '<metadata name="Application">BambuStudio-02.06.00.51</metadata>'
+        '<metadata name="BambuStudio:3mfVersion">1</metadata>'
+        f'<resources><basematerials id="1">{"".join(material_xml)}</basematerials>{"".join(objects_xml)}</resources>'
+        f'<build p:UUID="{uuid.uuid4()}">{"".join(builds_xml)}</build></model>'
+    )
+    model_settings = (
+        '<?xml version="1.0" encoding="UTF-8"?><config>'
+        f'{"".join(settings_objects)}{"".join(plate_xml)}</config>'
+    )
+    project_settings = json.dumps({"from": "project", "type": "process", "name": title})
+    slice_info = (
+        '<?xml version="1.0" encoding="UTF-8"?><config><header>'
+        '<header_item key="X-BBL-Client-Type" value="slicer"/>'
+        '<header_item key="X-BBL-Client-Version" value="02.06.00.51"/>'
+        '</header></config>'
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>'
+        '<Default Extension="config" ContentType="text/xml"/></Types>'
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Target="/3D/3dmodel.model" Id="rel-1" '
+        'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
+        '</Relationships>'
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", rels)
+        archive.writestr("3D/3dmodel.model", model_xml)
+        archive.writestr("Metadata/project_settings.config", project_settings)
+        archive.writestr("Metadata/model_settings.config", model_settings)
+        archive.writestr("Metadata/slice_info.config", slice_info)
+
+
 # --------------------------------------------------------------------------- #
 # Image -> Raster -> Palette
 # --------------------------------------------------------------------------- #
@@ -583,6 +706,7 @@ class Result:
     bom: list[dict]
     files: dict[str, list[Path]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    project_plate_names: list[str] = field(default_factory=list)
 
     def all_files(self) -> list[Path]:
         return [p for v in self.files.values() for p in v]
@@ -619,6 +743,7 @@ def generate(image_source, out_dir: str | Path = "output",
         raise MosaicError(f"Cannot create output directory '{out}': {exc}") from exc
 
     res = Result(out, np.zeros((o.grid, o.grid), dtype=int), [])
+    project_plates: list[tuple[str, list[PrintObject]]] = []
 
     img = load_image(image_source)
     small = center_crop_resize(img, o.grid)
@@ -645,6 +770,7 @@ def generate(image_source, out_dir: str | Path = "output",
             tile_objs = build_mosaic_tile_objects(sub, stud, o, origin, origin, 0.0, palette)
             for tobj in tile_objs:
                 tobj.name = f"{tile_names[tile_number - 1]} - {tobj.name}"
+            project_plates.append((tile_names[tile_number - 1], tile_objs))
             p3mf = out / f"mosaic_plate_{o.grid}x{o.grid}_tile_{tile_number}.3mf"
             pstl = out / f"mosaic_plate_{o.grid}x{o.grid}_tile_{tile_number}.stl"
             write_3mf(p3mf, tile_objs, f"LEGO mosaic {o.grid}x{o.grid} tile {tile_number}")
@@ -656,6 +782,7 @@ def generate(image_source, out_dir: str | Path = "output",
         size = o.grid * o.pitch
         origin = (o.bed - size) / 2
         tile_objs = build_mosaic_tile_objects(idx, stud, o, origin, origin, 0.0, palette)
+        project_plates.append((f"Grayscale {o.grid}x{o.grid}", tile_objs))
         p3mf, pstl = out / f"mosaic_plate_{o.grid}x{o.grid}.3mf", out / f"mosaic_plate_{o.grid}x{o.grid}.stl"
         write_3mf(p3mf, tile_objs, f"LEGO mosaic {o.grid}x{o.grid}")
         write_stl(merge_meshes([ob.mesh for ob in tile_objs]), pstl)
@@ -700,14 +827,22 @@ def generate(image_source, out_dir: str | Path = "output",
     color_plate_files: list[Path] = []
     for i, (c, row) in enumerate(zip(palette, res.bom)):
         needed = row["needed"]
-        for b, pos in enumerate(loose_positions(needed, stud_w, o), start=1):
+        beds = loose_positions(needed, stud_w, o)
+        for b, pos in enumerate(beds, start=1):
             name = f"plate_{c.code}_{_filename_slug(c.name_en)}_bed{b:02d}"
             obj = PrintObject(f"Studs {c.name_en}", tile_mesh(stud, pos), c.rgb, i + 1)
+            plate_name = c.name_en if len(beds) == 1 else f"{c.name_en} bed {b}"
+            project_plates.append((plate_name, [obj]))
             p3mf, pstl = out / f"{name}.3mf", out / f"{name}.stl"
             write_3mf(p3mf, [obj], f"{c.name_en} plate ({len(pos)} studs)")
             write_stl(obj.mesh, pstl)
             color_plate_files.extend([p3mf, pstl])
     res.files["color_plates"] = color_plate_files
+
+    project_path = out / "lego_mosaic_bambu_project.3mf"
+    write_bambu_multi_plate_3mf(project_path, project_plates, f"LEGO Mosaic {o.grid}x{o.grid}")
+    res.files["bambu_project"] = [project_path]
+    res.project_plate_names = [name for name, objects in project_plates if objects]
 
     pi, pp = out / "building_instructions.png", out / "mosaic_preview.png"
     render_instructions(idx, res.bom, pi, palette=palette)

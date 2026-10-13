@@ -2,7 +2,6 @@
 import io
 import html
 import tempfile
-import zipfile
 from pathlib import Path
 
 import streamlit as st
@@ -163,7 +162,7 @@ res = st.session_state.get("res")
 if res:
     for w in res.warnings:
         st.warning(w)
-    st.markdown(f'<div class="result-meta">✓ Mosaic ready&nbsp;&nbsp;·&nbsp;&nbsp;{len(res.all_files())} files</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="result-meta">✓ Mosaic ready&nbsp;&nbsp;·&nbsp;&nbsp;{len(res.project_plate_names)} print plates</div>', unsafe_allow_html=True)
     preview_col, bom_col = st.columns([1.25, 1], gap="large")
     with preview_col:
         with st.container(border=True):
@@ -205,16 +204,13 @@ if res:
             mime="application/pdf",
         )
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for p in res.all_files():
-            z.write(p, p.relative_to(res.out_dir))
-    st.caption("One ZIP download contains all print plates, printable instructions, preview and parts list.")
+    project_file = res.files["bambu_project"][0]
+    st.caption("One Bambu Studio project with multiple named print plates.")
     st.download_button(
-        "Download complete print package (ZIP)",
-        buf.getvalue(),
-        "lego_mosaic_print_package.zip",
-        "application/zip",
+        "Download Bambu Studio project (.3MF)",
+        project_file.read_bytes(),
+        "lego_mosaic_bambu_project.3mf",
+        "application/vnd.ms-package.3dmanufacturing-3dmodel+zip",
         type="primary",
     )
 else:
