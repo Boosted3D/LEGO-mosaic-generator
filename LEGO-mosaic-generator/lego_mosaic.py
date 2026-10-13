@@ -44,11 +44,14 @@ class LegoColor:
 
 
 PALETTE: tuple[LegoColor, ...] = (
-    LegoColor("BK", "Zwart", "Black", (5, 19, 29)),
-    LegoColor("DG", "Donkergrijs", "Dark Bluish Gray", (108, 110, 104)),
-    LegoColor("LG", "Lichtgrijs", "Light Bluish Gray", (160, 165, 169)),
-    LegoColor("WH", "Wit", "White", (255, 255, 255)),
-    LegoColor("YE", "Geel", "Yellow", (242, 205, 55)),
+    LegoColor("BK", "Zwart", "Black", (0, 0, 0)),
+    LegoColor("DG", "Donkergrijs", "Dark Gray", (84, 84, 84)),
+    LegoColor("GY", "Grijs", "Gray", (142, 144, 137)),
+    LegoColor("JW", "Jadewit", "Jade White", (255, 255, 255)),
+    LegoColor("BE", "Beige", "Beige", (247, 230, 222)),
+    LegoColor("CB", "Cacaobruin", "Cocoa Brown", (111, 80, 52)),
+    LegoColor("BL", "Kobaltblauw", "Cobalt Blue", (0, 86, 184)),
+    LegoColor("RD", "Rood", "Red", (193, 46, 31)),
 )
 
 
