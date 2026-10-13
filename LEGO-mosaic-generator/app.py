@@ -164,9 +164,23 @@ if res:
             st.markdown(table_html, unsafe_allow_html=True)
     with st.expander("Building instructions"):
         st.image(str(res.files["docs"][0]), use_container_width=True)
+        instruction_pdf = res.files["docs"][2]
+        st.download_button(
+            "Download printable instructions (PDF)",
+            instruction_pdf.read_bytes(),
+            file_name="building_instructions.pdf",
+            mime="application/pdf",
+        )
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for p in res.all_files():
             z.write(p, p.relative_to(res.out_dir))
-    st.download_button("⬇️ All files (ZIP)", buf.getvalue(), "lego_mosaic_output.zip", "application/zip")
+    st.caption("One ZIP download contains all print plates, printable instructions, preview and parts list.")
+    st.download_button(
+        "Download complete print package (ZIP)",
+        buf.getvalue(),
+        "lego_mosaic_print_package.zip",
+        "application/zip",
+        type="primary",
+    )

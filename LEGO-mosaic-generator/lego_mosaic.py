@@ -711,9 +711,12 @@ def generate(image_source, out_dir: str | Path = "output",
 
     pi, pp = out / "building_instructions.png", out / "mosaic_preview.png"
     render_instructions(idx, res.bom, pi, palette=palette)
+    pdf = out / "building_instructions.pdf"
+    with Image.open(pi) as instruction_image:
+        instruction_image.convert("RGB").save(pdf, "PDF", resolution=150.0)
     render_preview(idx, pp, palette=palette)
     jp, tp = write_bom(res.bom, idx, o, stud_path.name, out, palette=palette)
-    res.files["docs"] = [pi, pp, jp, tp]
+    res.files["docs"] = [pi, pp, pdf, jp, tp]
     return res
 
 
