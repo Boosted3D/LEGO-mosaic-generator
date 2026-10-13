@@ -170,16 +170,25 @@ if res:
     with st.expander("Print plate fit and edge clearance"):
         st.caption(f"Required edge margin: {edge_margin:g} mm · rotation: {rotation}°")
         for item in res.plate_edge_clearance:
-            x, y = item["position_mm"]
-            dx, dy = item["center_shift_mm"]
-            brim_note = " · brim disabled for this plate" if item.get("brim_disabled") else ""
-            st.write(
-                f"{item['plate']}: position ({x:.2f}, {y:.2f}) mm · "
-                f"shift ({dx:+.2f}, {dy:+.2f}) mm from bed center · "
-                f"edge {item['edge_clearance_mm']:.2f} mm · "
-                f"exclusion gap {item['exclusion_clearance_mm']:.2f} mm"
-                f"{brim_note}"
-            )
+            if "position_mm" in item and "center_shift_mm" in item:
+                x, y = item["position_mm"]
+                dx, dy = item["center_shift_mm"]
+                brim_note = " · brim disabled for this plate" if item.get("brim_disabled") else ""
+                st.write(
+                    f"{item['plate']}: position ({x:.2f}, {y:.2f}) mm · "
+                    f"shift ({dx:+.2f}, {dy:+.2f}) mm from bed center · "
+                    f"edge {item['edge_clearance_mm']:.2f} mm · "
+                    f"exclusion gap {item['exclusion_clearance_mm']:.2f} mm"
+                    f"{brim_note}"
+                )
+            else:
+                # Streamlit can retain a result created before placement reports
+                # gained position fields. Keep that session usable after deploy.
+                clearance = item.get("edge_clearance_mm", item.get("clearance_mm"))
+                if clearance is None:
+                    st.write(item["plate"])
+                else:
+                    st.write(f"{item['plate']}: edge clearance {float(clearance):.2f} mm")
     preview_col, bom_col = st.columns([1.25, 1], gap="large")
     with preview_col:
         with st.container(border=True):
