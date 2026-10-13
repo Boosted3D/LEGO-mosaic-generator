@@ -31,7 +31,28 @@ html, body, [class*="css"] { font-family: Inter, ui-sans-serif, system-ui, sans-
 [data-testid="stBaseButton-primary"] { background: var(--green); border: 1px solid var(--green); border-radius: 10px; color: white; transition: transform .15s ease, filter .15s ease; }
 [data-testid="stBaseButton-primary"]:hover { background: #07983e; border-color: #07983e; transform: translateY(-1px); }
 [data-testid="stDownloadButton"] button { border-radius: 10px; }
-[data-testid="stFileUploader"] section { border: 1px dashed #424854; border-radius: 14px; background: #111318; }
+[data-testid="stFileUploader"] section { border: 1px dashed #2d313a; border-radius: 0 0 16px 16px; background: #111318; min-height: 100px; transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+[data-testid="stFileUploader"] section:hover, [data-testid="stFileUploader"] section:focus-within { border-color: #00ae42; box-shadow: 0 0 0 3px #00ae421a; background: #121914; }
+[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzoneInstructions"] { color: #aab2bd; }
+[data-testid="stFileUploader"] button { border-radius: 8px; }
+.upload-copy { text-align:center; padding:24px 20px 12px; border:1px dashed #2d313a; border-bottom:0; border-radius:16px 16px 0 0; background:linear-gradient(180deg,#14171d,#111318); }
+.upload-copy svg { width:30px; height:30px; color:#aab2bd; margin-bottom:8px; }
+.upload-copy strong { display:block; color:#f0f2f5; font-size:1rem; font-weight:600; }
+.upload-copy span { display:block; color:#9299a6; font-size:.82rem; margin-top:5px; }
+.sidebar-section-title { color:#838c98; font-size:.68rem; font-weight:700; letter-spacing:.11em; margin:18px 0 8px; }
+.sidebar-rule { border:0; border-top:1px solid #2d313a; margin:14px 0; }
+.swatch-chip { display:flex; justify-content:center; margin:5px 0 1px; }
+.swatch-chip .swatch-dot { width:21px; height:21px; margin:0; border:1px solid #ffffff44; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label { justify-content:center; min-height:31px; border:1px solid #343a44; border-radius:999px; padding:2px 8px; background:#15181f; transition:opacity .15s ease,border-color .15s ease,background .15s ease; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label:has(input:checked) { border-color:#00ae42; background:#102018; box-shadow:0 0 0 2px #00ae4217; opacity:1; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label:not(:has(input:checked)) { opacity:.5; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label > span:first-child { display:none; }
+.empty-preview { min-height:300px; border:1px solid #2d313a; border-radius:18px; background:radial-gradient(ellipse at 50% 35%,#171b22 0%,#111318 70%); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px; text-align:center; }
+.placeholder-grid { display:grid; grid-template-columns:repeat(10,16px); gap:4px; margin-bottom:24px; opacity:.44; }
+.placeholder-grid span { width:16px; height:16px; border-radius:4px; background:#252b34; border:1px solid #343b46; }
+.placeholder-grid span:nth-child(7n),.placeholder-grid span:nth-child(13n),.placeholder-grid span:nth-child(29n) { background:#304136; border-color:#3b5944; }
+.empty-preview strong { color:#d8dde4; font-size:1rem; font-weight:600; }
+.empty-preview p { max-width:520px; margin:8px 0 0; color:#858e9a; font-size:.88rem; }
 .result-meta { color: #aeb5c0; background: #15181f; border: 1px solid #2d313a; border-radius: 999px; padding: 6px 12px; display: inline-block; font-size: .86rem; }
 .swatch-dot { width: 16px; height: 16px; border-radius: 50%; display: inline-block; border: 1px solid #ffffff55; vertical-align: -3px; margin-right: 8px; }
 .app-header { display:flex; justify-content:space-between; align-items:center; gap:24px; margin:12px 0 30px; }
@@ -71,6 +92,7 @@ st.markdown("""
 
 with st.sidebar:
     st.header("Settings")
+    st.markdown('<div class="sidebar-section-title">01 &nbsp; KLEURENPALET</div>', unsafe_allow_html=True)
     mode_label = st.radio("Palette", ["Kleur", "Grijstinten"], horizontal=True)
     palette_mode = "color" if mode_label == "Kleur" else "grayscale"
     selected_colors = None
@@ -83,11 +105,12 @@ with st.sidebar:
         selected_codes = []
         for index, color in enumerate(L.COLOR_PALETTE):
             with color_columns[index % 3]:
-                st.markdown(f'<div class="swatch-dot" title="{html.escape(color.name_en)}" style="background:{color.hex}"></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="swatch-chip"><span class="swatch-dot" title="{html.escape(color.name_en)}" style="background:{color.hex}"></span></div>', unsafe_allow_html=True)
                 checked = st.checkbox(color.code, value=True, key=f"use_color_{color.code}", help=color.name_en)
                 if checked:
                     selected_codes.append(color.code)
         selected_colors = tuple(selected_codes)
+    st.markdown('<hr class="sidebar-rule"><div class="sidebar-section-title">02 &nbsp; FORMAAT &amp; AFMETINGEN</div>', unsafe_allow_html=True)
     grid_size = st.selectbox("Format", [24, 30, 48, 60], index=2,
                              format_func=lambda x: f"{x}×{x} studs" + (f" (4 tiles of {x // 2}×{x // 2})" if x in (48, 60) else " (1 plate)"))
     reserve = st.number_input("Reserve (%)", 0.0, 100.0, 5.0, 1.0)
@@ -97,10 +120,20 @@ with st.sidebar:
                             format_func=lambda c: next(p.name_en for p in L.GRAYSCALE_PALETTE if p.code == c))
     else:
         thickness, base = 1.6, "BK"
+    st.markdown('<hr class="sidebar-rule"><div class="sidebar-section-title">03 &nbsp; PRINT INSTELLINGEN</div>', unsafe_allow_html=True)
     auto = st.checkbox("Auto-enhance contrast", value=True)
     loose_all = st.checkbox("Include loose studs (needed + reserve)", value=True)
 
-upload = st.file_uploader("Image (JPG/PNG)", type=["jpg", "jpeg", "png"])
+st.markdown('''
+<div class="upload-copy">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>
+  </svg>
+  <strong>Sleep je afbeelding hiernaartoe of klik om te uploaden</strong>
+  <span>Ondersteunt JPG en PNG · max. 200 MB</span>
+</div>
+''', unsafe_allow_html=True)
+upload = st.file_uploader("Image (JPG/PNG)", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
 
 if upload is not None:
     try:
@@ -183,4 +216,14 @@ if res:
         "lego_mosaic_print_package.zip",
         "application/zip",
         type="primary",
+    )
+else:
+    placeholder_cells = "".join("<span></span>" for _ in range(60))
+    st.markdown(
+        '<section class="empty-preview">'
+        f'<div class="placeholder-grid">{placeholder_cells}</div>'
+        '<strong>Your mosaic preview will appear here</strong>'
+        '<p>Upload een afbeelding om direct de 2D LEGO-preview en het 3D-bestandsoverzicht te bekijken.</p>'
+        '</section>',
+        unsafe_allow_html=True,
     )
