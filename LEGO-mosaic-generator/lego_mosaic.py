@@ -43,7 +43,7 @@ class LegoColor:
         return "#%02X%02X%02X" % self.rgb
 
 
-PALETTE: tuple[LegoColor, ...] = (
+COLOR_PALETTE: tuple[LegoColor, ...] = (
     LegoColor("BK", "Zwart", "Black", (0, 0, 0)),
     LegoColor("DG", "Donkergrijs", "Dark Gray", (84, 84, 84)),
     LegoColor("GY", "Grijs", "Gray", (142, 144, 137)),
@@ -53,11 +53,23 @@ PALETTE: tuple[LegoColor, ...] = (
     LegoColor("BL", "Kobaltblauw", "Cobalt Blue", (0, 86, 184)),
     LegoColor("RD", "Rood", "Red", (193, 46, 31)),
 )
+GRAYSCALE_PALETTE: tuple[LegoColor, ...] = COLOR_PALETTE[:4]
+# Keep the full color palette as the default for existing API callers.
+PALETTE: tuple[LegoColor, ...] = COLOR_PALETTE
+
+
+def palette_for_mode(mode: str) -> tuple[LegoColor, ...]:
+    if mode == "color":
+        return COLOR_PALETTE
+    if mode == "grayscale":
+        return GRAYSCALE_PALETTE
+    raise MosaicError(f"Unknown palette mode '{mode}'.")
 
 
 @dataclass
 class Options:
-    grid: int = 30                     # 30 or 48
+    grid: int = 48                     # 30 or 48
+    palette_mode: str = "color"        # "color" or "grayscale"
     pitch: float = PITCH_MM
     bed: float = BED_MM
     reserve_pct: float = 10.0          # extra studs in percentage
@@ -341,28 +353,27 @@ def srgb_to_lab(rgb) -> np.ndarray:
     return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], -1)
 
 
-_PAL_RGB = np.array([c.rgb for c in PALETTE], dtype=np.float64)
-_PAL_LAB = srgb_to_lab(_PAL_RGB)
-
-
-def _nearest(rgb) -> np.ndarray:
+def _nearest(rgb, palette_lab: np.ndarray) -> np.ndarray:
     lab = srgb_to_lab(rgb)
-    return ((lab[..., None, :] - _PAL_LAB) ** 2).sum(-1).argmin(-1)
+    return ((lab[..., None, :] - palette_lab) ** 2).sum(-1).argmin(-1)
 
 
-def quantize(img: Image.Image, dither: bool = False) -> np.ndarray:
+def quantize(img: Image.Image, dither: bool = False,
+             palette: tuple[LegoColor, ...] = PALETTE) -> np.ndarray:
     arr = np.asarray(img, dtype=np.float64)
+    palette_rgb = np.array([c.rgb for c in palette], dtype=np.float64)
+    palette_lab = srgb_to_lab(palette_rgb)
     if not dither:
-        return _nearest(arr).astype(np.int64)
+        return _nearest(arr, palette_lab).astype(np.int64)
     work = arr.copy()
     h, w, _ = work.shape
     idx = np.zeros((h, w), dtype=np.int64)
     for y in range(h):
         for x in range(w):
             old = np.clip(work[y, x], 0, 255)
-            k = int(_nearest(old))
+            k = int(_nearest(old, palette_lab))
             idx[y, x] = k
-            err = old - _PAL_RGB[k]
+            err = old - palette_rgb[k]
             if x + 1 < w:
                 work[y, x + 1] += err * 7 / 16
             if y + 1 < h:
@@ -374,8 +385,8 @@ def quantize(img: Image.Image, dither: bool = False) -> np.ndarray:
     return idx
 
 
-def count_studs(idx: np.ndarray) -> list[int]:
-    return [int((idx == i).sum()) for i in range(len(PALETTE))]
+def count_studs(idx: np.ndarray, palette: tuple[LegoColor, ...] = PALETTE) -> list[int]:
+    return [int((idx == i).sum()) for i in range(len(palette))]
 
 
 def with_reserve(count: int, pct: float) -> int:
@@ -385,22 +396,26 @@ def with_reserve(count: int, pct: float) -> int:
 # --------------------------------------------------------------------------- #
 # 3D Construction
 # --------------------------------------------------------------------------- #
-def build_mosaic_tile_objects(sub_idx: np.ndarray, stud: Mesh, o: Options, x_off_mm: float, y_off_mm: float, base_z: float) -> list[PrintObject]:
+def build_mosaic_tile_objects(sub_idx: np.ndarray, stud: Mesh, o: Options,
+                             x_off_mm: float, y_off_mm: float, base_z: float,
+                             palette: tuple[LegoColor, ...] = PALETTE,
+                             include_baseplate: bool = True) -> list[PrintObject]:
     n = sub_idx.shape[0]
     size = n * o.pitch
-    base_i = next(i for i, c in enumerate(PALETTE) if c.code == o.base_color)
-    base = PALETTE[base_i]
-    
-    objs = [PrintObject(f"Baseplate ({base.name_en})",
-                        box_mesh(x_off_mm, y_off_mm, base_z, size, size, o.plate_thickness),
-                        base.rgb, base_i + 1)]
-    
-    for i, c in enumerate(PALETTE):
+    objs: list[PrintObject] = []
+    if include_baseplate:
+        base_i = next(i for i, c in enumerate(palette) if c.code == o.base_color)
+        base = palette[base_i]
+        objs.append(PrintObject(f"Baseplate ({base.name_en})",
+                                box_mesh(x_off_mm, y_off_mm, base_z, size, size, o.plate_thickness),
+                                base.rgb, base_i + 1))
+
+    for i, c in enumerate(palette):
         r_sub, c_sub = np.nonzero(sub_idx == i)
         if len(r_sub) > 0:
             x = x_off_mm + (c_sub + 0.5) * o.pitch
             y = y_off_mm + (n - 1 - r_sub + 0.5) * o.pitch
-            z = np.full_like(x, base_z + o.plate_thickness, dtype=float)
+            z = np.full_like(x, base_z + (o.plate_thickness if include_baseplate else 0.0), dtype=float)
             pos = np.column_stack([x, y, z])
             objs.append(PrintObject(f"Studs {c.name_en}", tile_mesh(stud, pos), c.rgb, i + 1))
     return objs
@@ -449,10 +464,11 @@ def _text_color(rgb) -> tuple[int, int, int]:
     return (0, 0, 0) if lum > 140 else (255, 255, 255)
 
 
-def render_instructions(idx: np.ndarray, bom: list[dict], path: Path, cell: int = 34) -> None:
+def render_instructions(idx: np.ndarray, bom: list[dict], path: Path, cell: int = 34,
+                        palette: tuple[LegoColor, ...] = PALETTE) -> None:
     n = idx.shape[0]
     m = 48
-    legend_h = 70 + len(PALETTE) * 36
+    legend_h = 70 + len(palette) * 36
     w, h = 2 * m + n * cell, 2 * m + n * cell + legend_h
     img = Image.new("RGB", (w, h), "white")
     d = ImageDraw.Draw(img)
@@ -460,7 +476,7 @@ def render_instructions(idx: np.ndarray, bom: list[dict], path: Path, cell: int 
 
     for r in range(n):
         for c in range(n):
-            col = PALETTE[idx[r, c]]
+            col = palette[idx[r, c]]
             x, y = m + c * cell, m + r * cell
             d.rectangle([x, y, x + cell, y + cell], fill=col.rgb)
             d.text((x + cell / 2, y + cell / 2), col.code, font=f_cell,
@@ -484,7 +500,7 @@ def render_instructions(idx: np.ndarray, bom: list[dict], path: Path, cell: int 
     for x, t in ((m + 330, "Needed"), (m + 430, "Reserve"), (m + 540, "Total to print")):
         d.text((x, y), t, font=f_small, fill="black")
     y += 26
-    for row, col in zip(bom, PALETTE):
+    for row, col in zip(bom, palette):
         d.rectangle([m, y, m + 36, y + 26], fill=col.rgb, outline="black")
         d.text((m + 18, y + 13), col.code, font=f_cell, fill=_text_color(col.rgb), anchor="mm")
         d.text((m + 50, y + 5), f"{col.name_en}", font=f_small, fill="black")
@@ -495,21 +511,23 @@ def render_instructions(idx: np.ndarray, bom: list[dict], path: Path, cell: int 
     img.save(path)
 
 
-def render_preview(idx: np.ndarray, path: Path, cell: int = 20) -> None:
+def render_preview(idx: np.ndarray, path: Path, cell: int = 20,
+                   palette: tuple[LegoColor, ...] = PALETTE) -> None:
     n = idx.shape[0]
     img = Image.new("RGB", (n * cell, n * cell))
     d = ImageDraw.Draw(img)
     for r in range(n):
         for c in range(n):
             x, y = c * cell, r * cell
-            d.rectangle([x, y, x + cell - 1, y + cell - 1], fill=PALETTE[idx[r, c]].rgb)
+            d.rectangle([x, y, x + cell - 1, y + cell - 1], fill=palette[idx[r, c]].rgb)
             d.ellipse([x + 3, y + 3, x + cell - 4, y + cell - 4], outline=(0, 0, 0, 60), width=1)
     img.save(path)
 
 
-def make_bom(counts: list[int], reserve_pct: float) -> list[dict]:
+def make_bom(counts: list[int], reserve_pct: float,
+             palette: tuple[LegoColor, ...] = PALETTE) -> list[dict]:
     rows = []
-    for c, cnt in zip(PALETTE, counts):
+    for c, cnt in zip(palette, counts):
         total = with_reserve(cnt, reserve_pct)
         rows.append({"code": c.code, "name_nl": c.name_nl, "name_en": c.name_en,
                      "rgb": list(c.rgb), "hex": c.hex, "needed": cnt,
@@ -517,7 +535,8 @@ def make_bom(counts: list[int], reserve_pct: float) -> list[dict]:
     return rows
 
 
-def write_bom(bom: list[dict], idx: np.ndarray, o: Options, stud_file: str, out: Path) -> tuple[Path, Path]:
+def write_bom(bom: list[dict], idx: np.ndarray, o: Options, stud_file: str, out: Path,
+              palette: tuple[LegoColor, ...] = PALETTE) -> tuple[Path, Path]:
     n = o.grid
     tot_needed = sum(r["needed"] for r in bom)
     tot_extra = sum(r["reserve_extra"] for r in bom)
@@ -528,7 +547,8 @@ def write_bom(bom: list[dict], idx: np.ndarray, o: Options, stud_file: str, out:
         "colors": bom,
         "totals": {"needed": tot_needed, "reserve_extra": tot_extra,
                    "total_to_print": tot_needed + tot_extra},
-        "layout_rows_top_to_bottom": ["".join(PALETTE[i].code.ljust(3) for i in row).rstrip() for row in idx],
+        "palette_mode": o.palette_mode,
+        "layout_rows_top_to_bottom": ["".join(palette[i].code.ljust(3) for i in row).rstrip() for row in idx],
     }
     jp, tp = out / "bill_of_materials.json", out / "bill_of_materials.txt"
     jp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -559,7 +579,8 @@ class Result:
 
 
 def _validate(o: Options) -> None:
-    if o.base_color not in {c.code for c in PALETTE}:
+    palette = palette_for_mode(o.palette_mode)
+    if o.palette_mode == "grayscale" and o.base_color not in {c.code for c in palette}:
         raise MosaicError(f"Unknown base color '{o.base_color}'.")
     if o.reserve_pct < 0:
         raise MosaicError("Reserve percentage cannot be negative.")
@@ -571,6 +592,7 @@ def generate(image_source, out_dir: str | Path = "output",
              assets_dir: str | Path | None = None, options: Options | None = None) -> Result:
     o = options or Options()
     _validate(o)
+    palette = palette_for_mode(o.palette_mode)
     here = Path(__file__).resolve().parent
     assets = Path(assets_dir) if assets_dir else here / "assets"
     out = Path(out_dir)
@@ -585,17 +607,17 @@ def generate(image_source, out_dir: str | Path = "output",
     small = center_crop_resize(img, o.grid)
     if o.autocontrast:
         small = ImageOps.autocontrast(small, cutoff=1)
-    idx = quantize(small, o.dither)
+    idx = quantize(small, o.dither, palette)
     res.idx = idx
 
-    counts = count_studs(idx)
-    res.bom = make_bom(counts, o.reserve_pct)
+    counts = count_studs(idx, palette)
+    res.bom = make_bom(counts, o.reserve_pct, palette)
 
     stud, stud_path, warns = load_stud(assets, o.pitch)
     res.warnings += warns
     stud_w = float(max(stud.bounds()[1][:2] - stud.bounds()[0][:2]))
 
-    if o.grid == 48:
+    if o.palette_mode == "grayscale" and o.grid == 48:
         half = 24
         tile_size_mm = half * o.pitch
         gap = 4.0
@@ -613,7 +635,7 @@ def generate(image_source, out_dir: str | Path = "output",
         all_objs = []
         for r_idx, c_idx, tx, ty, tname in coords:
             sub = idx[r_idx*half:(r_idx+1)*half, c_idx*half:(c_idx+1)*half]
-            tile_objs = build_mosaic_tile_objects(sub, stud, o, tx, ty, 0.0)
+            tile_objs = build_mosaic_tile_objects(sub, stud, o, tx, ty, 0.0, palette)
             for tobj in tile_objs:
                 tobj.name = f"{tname} - {tobj.name}"
                 all_objs.append(tobj)
@@ -622,10 +644,10 @@ def generate(image_source, out_dir: str | Path = "output",
         write_3mf(p3mf, all_objs, "LEGO mosaic 48x48 (4 tiles)")
         write_stl(merge_meshes([ob.mesh for ob in all_objs]), pstl)
         res.files["plate"] = [p3mf, pstl]
-    else:
+    elif o.palette_mode == "grayscale":
         size = o.grid * o.pitch
         origin = (o.bed - size) / 2
-        tile_objs = build_mosaic_tile_objects(idx, stud, o, origin, origin, 0.0)
+        tile_objs = build_mosaic_tile_objects(idx, stud, o, origin, origin, 0.0, palette)
         p3mf, pstl = out / "mosaic_plate.3mf", out / "mosaic_plate.stl"
         write_3mf(p3mf, tile_objs, "LEGO mosaic 30x30")
         write_stl(merge_meshes([ob.mesh for ob in tile_objs]), pstl)
@@ -638,7 +660,7 @@ def generate(image_source, out_dir: str | Path = "output",
     per_color = [(r["total_to_print"] if o.loose_include_needed else r["reserve_extra"]) for r in res.bom]
 
     stl_files = []
-    for i, (c, k) in enumerate(zip(PALETTE, per_color)):
+    for i, (c, k) in enumerate(zip(palette, per_color)):
         for b, pos in enumerate(loose_positions(k, stud_w, o), start=1):
             fp = spare_dir / f"spare_{c.code}_{c.name_en.lower().replace(' ', '_')}_bed{b:02d}.stl"
             write_stl(tile_mesh(stud, pos), fp)
@@ -656,7 +678,7 @@ def generate(image_source, out_dir: str | Path = "output",
             cursor += len(pos)
             bed_objs = []
             for i in np.unique(cols_here):
-                c = PALETTE[i]
+                c = palette[i]
                 bed_objs.append(PrintObject(f"Studs {c.name_en}",
                                             tile_mesh(stud, pos[cols_here == i]), c.rgb, int(i) + 1))
             fp = spare_dir / f"spare_multicolor_bed{b:02d}.3mf"
@@ -668,7 +690,7 @@ def generate(image_source, out_dir: str | Path = "output",
     # A color-specific print plate containing exactly the studs used in the
     # mosaic. Large counts are split across bed-sized files for safe printing.
     color_plate_files: list[Path] = []
-    for i, (c, row) in enumerate(zip(PALETTE, res.bom)):
+    for i, (c, row) in enumerate(zip(palette, res.bom)):
         needed = row["needed"]
         for b, pos in enumerate(loose_positions(needed, stud_w, o), start=1):
             name = f"plate_{c.code}_{c.name_en.lower().replace(' ', '_')}_bed{b:02d}"
@@ -680,9 +702,9 @@ def generate(image_source, out_dir: str | Path = "output",
     res.files["color_plates"] = color_plate_files
 
     pi, pp = out / "building_instructions.png", out / "mosaic_preview.png"
-    render_instructions(idx, res.bom, pi)
-    render_preview(idx, pp)
-    jp, tp = write_bom(res.bom, idx, o, stud_path.name, out)
+    render_instructions(idx, res.bom, pi, palette=palette)
+    render_preview(idx, pp, palette=palette)
+    jp, tp = write_bom(res.bom, idx, o, stud_path.name, out, palette=palette)
     res.files["docs"] = [pi, pp, jp, tp]
     return res
 
@@ -690,7 +712,9 @@ def generate(image_source, out_dir: str | Path = "output",
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Image -> LEGO Mosaic + 3D print files.")
     ap.add_argument("image", help="JPG/PNG image")
-    ap.add_argument("--grid", type=int, default=30, choices=[30, 48])
+    ap.add_argument("--grid", type=int, default=48, choices=[30, 48])
+    ap.add_argument("--mode", choices=["color", "grayscale"], default="color",
+                    help="palette mode (default: color)")
     ap.add_argument("--out", default="output", help="output directory")
     ap.add_argument("--assets", default=None, help="directory with stud.stl")
     ap.add_argument("--reserve", type=float, default=10.0, help="reserve in %%")
@@ -700,7 +724,8 @@ def main(argv=None) -> int:
     ap.add_argument("--no-autocontrast", action="store_true")
     ap.add_argument("--loose-all", action="store_true")
     a = ap.parse_args(argv)
-    opts = Options(grid=a.grid, reserve_pct=a.reserve, plate_thickness=a.thickness, base_color=a.base_color,
+    opts = Options(grid=a.grid, palette_mode=a.mode, reserve_pct=a.reserve,
+                   plate_thickness=a.thickness, base_color=a.base_color,
                    dither=a.dither, autocontrast=not a.no_autocontrast, loose_include_needed=a.loose_all)
     try:
         r = generate(a.image, a.out, a.assets, opts)
