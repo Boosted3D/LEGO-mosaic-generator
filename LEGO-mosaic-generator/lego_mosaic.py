@@ -801,7 +801,8 @@ def generate(image_source, out_dir: str | Path = "output",
             tile_objs = build_mosaic_tile_objects(sub, stud, o, origin, origin, 0.0, palette)
             for tobj in tile_objs:
                 tobj.name = f"{tile_names[tile_number - 1]} - {tobj.name}"
-            project_plates.append((f"Mosaic - {tile_names[tile_number - 1]}", tile_objs))
+            if o.palette_mode == "grayscale":
+                project_plates.append((f"Mosaic - {tile_names[tile_number - 1]}", tile_objs))
             if o.palette_mode == "grayscale":
                 p3mf = out / f"mosaic_plate_{o.grid}x{o.grid}_tile_{tile_number}.3mf"
                 pstl = out / f"mosaic_plate_{o.grid}x{o.grid}_tile_{tile_number}.stl"
@@ -815,7 +816,8 @@ def generate(image_source, out_dir: str | Path = "output",
         size = o.grid * o.pitch
         origin = (o.bed - size) / 2
         tile_objs = build_mosaic_tile_objects(idx, stud, o, origin, origin, 0.0, palette)
-        project_plates.append((f"Mosaic {o.grid}x{o.grid}", tile_objs))
+        if o.palette_mode == "grayscale":
+            project_plates.append((f"Mosaic {o.grid}x{o.grid}", tile_objs))
         if o.palette_mode == "grayscale":
             p3mf, pstl = out / f"mosaic_plate_{o.grid}x{o.grid}.3mf", out / f"mosaic_plate_{o.grid}x{o.grid}.stl"
             write_3mf(p3mf, tile_objs, f"LEGO mosaic {o.grid}x{o.grid}")
@@ -857,9 +859,9 @@ def generate(image_source, out_dir: str | Path = "output",
     res.files["spare_3mf"] = mc_files
     res.files["spare_stl"] = stl_files
 
-    # Export optional color-specific stud plates as standalone files. Keep
-    # these out of the multi-plate Bambu project: that project should contain
-    # only the mosaic baseplate tile(s), with each color grouped in-place.
+    # Export studs grouped by color. In color mode, each bed-sized group is a
+    # separate named plate in the Bambu project; large color counts are split
+    # across as many plates as the printer bed can hold.
     color_plate_files: list[Path] = []
     for i, (c, row) in enumerate(zip(palette, res.bom)):
         needed = row["needed"]
@@ -868,6 +870,9 @@ def generate(image_source, out_dir: str | Path = "output",
             name = f"plate_{c.code}_{_filename_slug(c.name_en)}_bed{b:02d}"
             obj = PrintObject(f"Studs {c.name_en}", tile_mesh(stud, pos), c.rgb,
                               filament_slot(c.code))
+            if o.palette_mode == "color":
+                plate_name = c.name_en if len(beds) == 1 else f"{c.name_en} - Plate {b}"
+                project_plates.append((plate_name, [obj]))
             p3mf, pstl = out / f"{name}.3mf", out / f"{name}.stl"
             write_3mf(p3mf, [obj], f"{c.name_en} plate ({len(pos)} studs)")
             write_stl(obj.mesh, pstl)
