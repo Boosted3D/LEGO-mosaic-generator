@@ -339,14 +339,16 @@ def write_bambu_multi_plate_3mf(
     plate_xml: list[str] = []
     object_id = 2
     plate_columns = math.ceil(math.sqrt(len(plates)))
-    # Exact bed-sized cells let Bambu Studio resolve each virtual plate.
-    plate_stride = BED_MM
+    # Bambu Studio places logical plates on a grid with a 20% gap between
+    # bed-sized cells. Keep the same stride and negative Y direction so each
+    # plate's meshes land inside the matching virtual build plate.
+    plate_stride = BED_MM * 1.2
 
     for plate_index, (plate_name, print_objects) in enumerate(plates):
         # Bambu Studio determines logical plates from each object's world-space
         # bounds. Keep each plate's meshes inside a separate virtual bed cell.
         plate_x = (plate_index % plate_columns) * plate_stride
-        plate_y = (plate_index // plate_columns) * plate_stride
+        plate_y = -(plate_index // plate_columns) * plate_stride
         instance_xml: list[str] = []
         # Keep a complete, 1-based identity map for each plate. Bambu Studio
         # uses the map together with each model object's `extruder` metadata.
@@ -441,6 +443,7 @@ def write_bambu_multi_plate_3mf(
         "filament_multi_colour": [color.hex for color in palette],
         "filament_colour_type": ["1"] * len(palette),
         "filament_settings_id": ["Generic PLA @base"] * len(palette),
+        "default_filament_profile": ["Generic PLA @base"] * len(palette),
         "filament_type": ["PLA"] * len(palette),
         "filament_vendor": ["Generic"] * len(palette),
         "filament_ids": ["GFL99"] * len(palette),
