@@ -92,8 +92,6 @@ class Options:
     pitch: float = PITCH_MM
     bed: float = BED_MM
     reserve_pct: float = 5.0           # extra studs in percentage
-    plate_thickness: float = 1.6       # baseplate thickness (mm)
-    base_color: str = "BK"             # baseplate color code
     dither: bool = False               # Floyd-Steinberg dithering
     autocontrast: bool = True          # stretch histogram for better results
     loose_include_needed: bool = False  # loose studs: reserve only (False) or all (True)
@@ -224,23 +222,6 @@ def tile_mesh(template: Mesh, positions: np.ndarray) -> Mesh:
     return Mesh(verts, faces)
 
 
-def box_mesh(x0, y0, z0, dx, dy, dz) -> Mesh:
-    v = np.array(
-        [[0, 0, 0], [dx, 0, 0], [dx, dy, 0], [0, dy, 0],
-         [0, 0, dz], [dx, 0, dz], [dx, dy, dz], [0, dy, dz]], dtype=float
-    ) + [x0, y0, z0]
-    f = np.array(
-        [[0, 3, 2], [0, 2, 1],
-         [4, 5, 6], [4, 6, 7],
-         [0, 1, 5], [0, 5, 4],
-         [1, 2, 6], [1, 6, 5],
-         [2, 3, 7], [2, 7, 6],
-         [3, 0, 4], [3, 4, 7]],
-        dtype=np.int64,
-    )
-    return Mesh(v, f)
-
-
 def write_stl(mesh: Mesh, path: Path) -> None:
     tri = mesh.vertices[mesh.faces]
     n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
@@ -358,13 +339,14 @@ def write_bambu_multi_plate_3mf(
     plate_xml: list[str] = []
     object_id = 2
     plate_columns = math.ceil(math.sqrt(len(plates)))
-    plate_stride = BED_MM * 1.2
+    # Exact bed-sized cells let Bambu Studio resolve each virtual plate.
+    plate_stride = BED_MM
 
     for plate_index, (plate_name, print_objects) in enumerate(plates):
         # Bambu Studio determines logical plates from each object's world-space
         # bounds. Keep each plate's meshes inside a separate virtual bed cell.
         plate_x = (plate_index % plate_columns) * plate_stride
-        plate_y = -(plate_index // plate_columns) * plate_stride
+        plate_y = (plate_index // plate_columns) * plate_stride
         instance_xml: list[str] = []
         # Keep a complete, 1-based identity map for each plate. Bambu Studio
         # uses the map together with each model object's `extruder` metadata.
@@ -397,7 +379,7 @@ def write_bambu_multi_plate_3mf(
             mesh_xml.append("</triangles></mesh>")
             objects_xml.append(
                 f'<object id="{object_id}" name="{escape(print_object.name)}" '
-                f'type="model" p:UUID="{obj_uuid}">'
+                f'type="model" pid="1" pindex="{material_index}" p:UUID="{obj_uuid}">'
                 f'{"".join(mesh_xml)}</object>'
             )
             builds_xml.append(
@@ -413,6 +395,7 @@ def write_bambu_multi_plate_3mf(
                 '<model_instance>'
                 f'<metadata key="object_id" value="{object_id}"/>'
                 '<metadata key="instance_id" value="0"/>'
+                f'<metadata key="identify_id" value="{object_id}"/>'
                 '</model_instance>'
             )
             object_id += 1
@@ -457,7 +440,7 @@ def write_bambu_multi_plate_3mf(
         "filament_colour": [color.hex for color in palette],
         "filament_multi_colour": [color.hex for color in palette],
         "filament_colour_type": ["1"] * len(palette),
-        "filament_settings_id": [""] * len(palette),
+        "filament_settings_id": ["Generic PLA @base"] * len(palette),
         "filament_type": ["PLA"] * len(palette),
         "filament_vendor": ["Generic"] * len(palette),
         "filament_ids": ["GFL99"] * len(palette),
@@ -465,6 +448,7 @@ def write_bambu_multi_plate_3mf(
         "filament_diameter": ["1.75"] * len(palette),
         "filament_map": list(range(1, len(palette) + 1)),
         "filament_volume_map": [0] * len(palette),
+        "filament_self_index": list(range(1, len(palette) + 1)),
     })
     slice_info = (
         '<?xml version="1.0" encoding="UTF-8"?><config><header>'
@@ -582,25 +566,15 @@ def with_reserve(count: int, pct: float) -> int:
 # --------------------------------------------------------------------------- #
 def build_mosaic_tile_objects(sub_idx: np.ndarray, stud: Mesh, o: Options,
                              x_off_mm: float, y_off_mm: float, base_z: float,
-                             palette: tuple[LegoColor, ...] = PALETTE,
-                             include_baseplate: bool = True) -> list[PrintObject]:
+                             palette: tuple[LegoColor, ...] = PALETTE) -> list[PrintObject]:
     n = sub_idx.shape[0]
-    size = n * o.pitch
     objs: list[PrintObject] = []
-    if include_baseplate:
-        base = next((c for c in COLOR_PALETTE if c.code == o.base_color), None)
-        if base is None:
-            raise MosaicError(f"Unknown baseplate color '{o.base_color}'.")
-        objs.append(PrintObject(f"Baseplate ({base.name_en})",
-                                box_mesh(x_off_mm, y_off_mm, base_z, size, size, o.plate_thickness),
-                                base.rgb, filament_slot(base.code)))
-
     for i, c in enumerate(palette):
         r_sub, c_sub = np.nonzero(sub_idx == i)
         if len(r_sub) > 0:
             x = x_off_mm + (c_sub + 0.5) * o.pitch
             y = y_off_mm + (n - 1 - r_sub + 0.5) * o.pitch
-            z = np.full_like(x, base_z + (o.plate_thickness if include_baseplate else 0.0), dtype=float)
+            z = np.full_like(x, base_z, dtype=float)
             pos = np.column_stack([x, y, z])
             objs.append(PrintObject(f"Studs {c.name_en}", tile_mesh(stud, pos), c.rgb,
                                     filament_slot(c.code)))
@@ -722,38 +696,28 @@ def make_bom(counts: list[int], reserve_pct: float,
 
 
 def write_bom(bom: list[dict], idx: np.ndarray, o: Options, stud_file: str, out: Path,
-              palette: tuple[LegoColor, ...] = PALETTE,
-              baseplate_count: int = 0) -> tuple[Path, Path]:
+              palette: tuple[LegoColor, ...] = PALETTE) -> tuple[Path, Path]:
     n = o.grid
     tot_needed = sum(r["needed"] for r in bom)
     tot_extra = sum(r["reserve_extra"] for r in bom)
     data = {
         "grid": f"{n}x{n}", "positions": n * n, "stud_pitch_mm": o.pitch,
-        "plate_size_mm": [n * o.pitch, n * o.pitch], "plate_thickness_mm": o.plate_thickness,
+        "plate_size_mm": [n * o.pitch, n * o.pitch],
         "reserve_percent": o.reserve_pct, "stud_model": stud_file,
         "colors": bom,
-        "baseplate": {
-            "code": o.base_color,
-            "name_en": next(c.name_en for c in COLOR_PALETTE if c.code == o.base_color),
-            "hex": next(c.hex for c in COLOR_PALETTE if c.code == o.base_color),
-            "count": baseplate_count,
-        },
         "totals": {"needed": tot_needed, "reserve_extra": tot_extra,
-                   "baseplates": baseplate_count,
-                   "total_to_print": tot_needed + tot_extra + baseplate_count},
+                   "total_to_print": tot_needed + tot_extra},
         "palette_mode": o.palette_mode,
         "layout_rows_top_to_bottom": ["".join(palette[i].code.ljust(3) for i in row).rstrip() for row in idx],
     }
     jp, tp = out / "bill_of_materials.json", out / "bill_of_materials.txt"
     jp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    base_color = next(c for c in COLOR_PALETTE if c.code == o.base_color)
     lines = [f"BILL OF MATERIALS - {n}x{n} LEGO Mosaic ({n * n} positions, +{o.reserve_pct:g}% reserve)",
              "=" * 66,
              f"{'Code':<5}{'Color':<14}{'Needed':>8}{'Reserve':>10}{'Total':>10}", "-" * 66]
-    lines.append(f"{base_color.code:<5}{('Baseplate - ' + base_color.name_en):<14}{baseplate_count:>8}{0:>10}{baseplate_count:>10}")
     for r in bom:
         lines.append(f"{r['code']:<5}{r['name_en']:<14}{r['needed']:>8}{'+' + str(r['reserve_extra']):>10}{r['total_to_print']:>10}")
-    lines += ["-" * 66, f"{'':<19}{tot_needed + baseplate_count:>8}{'+' + str(tot_extra):>10}{tot_needed + tot_extra + baseplate_count:>10}",
+    lines += ["-" * 66, f"{'':<19}{tot_needed:>8}{'+' + str(tot_extra):>10}{tot_needed + tot_extra:>10}",
               "", f"Plate: {n * o.pitch:g} x {n * o.pitch:g} mm, pitch {o.pitch:g} mm, stud: {stud_file}"]
     tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return jp, tp
@@ -770,8 +734,6 @@ class Result:
     files: dict[str, list[Path]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     project_plate_names: list[str] = field(default_factory=list)
-    baseplate_color: LegoColor | None = None
-    baseplate_count: int = 0
 
     def all_files(self) -> list[Path]:
         return [p for v in self.files.values() for p in v]
@@ -781,12 +743,8 @@ def _validate(o: Options) -> None:
     palette = palette_for_mode(o.palette_mode, o.selected_colors)
     if o.palette_mode == "color" and not palette:
         raise MosaicError("Select at least one color to generate the mosaic.")
-    if o.base_color not in {c.code for c in COLOR_PALETTE}:
-        raise MosaicError(f"Unknown base color '{o.base_color}'.")
     if o.reserve_pct < 0:
         raise MosaicError("Reserve percentage cannot be negative.")
-    if o.plate_thickness <= 0:
-        raise MosaicError("Plate thickness must be greater than 0.")
 
 
 def _filename_slug(value: str) -> str:
@@ -819,9 +777,6 @@ def generate(image_source, out_dir: str | Path = "output",
 
     counts = count_studs(idx, palette)
     res.bom = make_bom(counts, o.reserve_pct, palette)
-    res.baseplate_color = next(c for c in COLOR_PALETTE if c.code == o.base_color)
-    res.baseplate_count = 4 if o.grid in (48, 60) else 1
-
     stud, stud_path, warns = load_stud(assets, o.pitch)
     res.warnings += warns
     stud_w = float(max(stud.bounds()[1][:2] - stud.bounds()[0][:2]))
@@ -833,12 +788,12 @@ def generate(image_source, out_dir: str | Path = "output",
         plate_files = []
         tile_names = ("Top-left", "Top-right", "Bottom-left", "Bottom-right")
         for tile_number, (r_idx, c_idx) in enumerate(((0, 0), (0, 1), (1, 0), (1, 1)), start=1):
-            sub = idx[r_idx*half:(r_idx+1)*half, c_idx*half:(c_idx+1)*half]
-            tile_objs = build_mosaic_tile_objects(sub, stud, o, origin, origin, 0.0, palette)
-            for tobj in tile_objs:
-                tobj.name = f"{tile_names[tile_number - 1]} - {tobj.name}"
-            project_plates.append((f"Mosaic - {tile_names[tile_number - 1]}", tile_objs))
             if o.palette_mode == "grayscale":
+                sub = idx[r_idx*half:(r_idx+1)*half, c_idx*half:(c_idx+1)*half]
+                tile_objs = build_mosaic_tile_objects(sub, stud, o, origin, origin, 0.0, palette)
+                for tobj in tile_objs:
+                    tobj.name = f"{tile_names[tile_number - 1]} - {tobj.name}"
+                project_plates.append((f"Mosaic - {tile_names[tile_number - 1]}", tile_objs))
                 p3mf = out / f"mosaic_plate_{o.grid}x{o.grid}_tile_{tile_number}.3mf"
                 pstl = out / f"mosaic_plate_{o.grid}x{o.grid}_tile_{tile_number}.stl"
                 write_3mf(p3mf, tile_objs, f"LEGO mosaic {o.grid}x{o.grid} tile {tile_number}")
@@ -848,11 +803,11 @@ def generate(image_source, out_dir: str | Path = "output",
         if o.palette_mode == "grayscale":
             res.files["plate"] = plate_files
     else:
-        size = o.grid * o.pitch
-        origin = (o.bed - size) / 2
-        tile_objs = build_mosaic_tile_objects(idx, stud, o, origin, origin, 0.0, palette)
-        project_plates.append((f"Mosaic {o.grid}x{o.grid}", tile_objs))
         if o.palette_mode == "grayscale":
+            size = o.grid * o.pitch
+            origin = (o.bed - size) / 2
+            tile_objs = build_mosaic_tile_objects(idx, stud, o, origin, origin, 0.0, palette)
+            project_plates.append((f"Mosaic {o.grid}x{o.grid}", tile_objs))
             p3mf, pstl = out / f"mosaic_plate_{o.grid}x{o.grid}.3mf", out / f"mosaic_plate_{o.grid}x{o.grid}.stl"
             write_3mf(p3mf, tile_objs, f"LEGO mosaic {o.grid}x{o.grid}")
             write_stl(merge_meshes([ob.mesh for ob in tile_objs]), pstl)
@@ -893,8 +848,27 @@ def generate(image_source, out_dir: str | Path = "output",
     res.files["spare_3mf"] = mc_files
     res.files["spare_stl"] = stl_files
 
-    # Export color counts as separate auxiliary files. The Bambu project above
-    # keeps the complete mosaic layout and groups studs by color in-place.
+    # The Bambu project uses one plate per color, splitting a color only when
+    # its studs exceed the usable build-bed capacity. No baseplate meshes are
+    # included; all exported meshes are the studs that form the mosaic.
+    if o.palette_mode == "color":
+        for color_index, color in enumerate(palette):
+            count = int(np.count_nonzero(idx == color_index))
+            if count == 0:
+                continue
+            positions_by_plate = loose_positions(count, stud_w, o)
+            for plate_index, positions in enumerate(positions_by_plate, start=1):
+                stud_object = PrintObject(
+                    f"Studs {color.name_en}",
+                    tile_mesh(stud, positions),
+                    color.rgb,
+                    filament_slot(color.code),
+                )
+                project_plates.append(
+                    (f"{color.name_en} - Plate {plate_index}", [stud_object])
+                )
+
+    # Export color counts as separate auxiliary files for users who want them.
     color_plate_files: list[Path] = []
     for i, (c, row) in enumerate(zip(palette, res.bom)):
         needed = row["needed"]
@@ -925,8 +899,7 @@ def generate(image_source, out_dir: str | Path = "output",
     with Image.open(pi) as instruction_image:
         instruction_image.convert("RGB").save(pdf, "PDF", resolution=150.0)
     render_preview(idx, pp, palette=palette)
-    jp, tp = write_bom(res.bom, idx, o, stud_path.name, out, palette=palette,
-                       baseplate_count=res.baseplate_count)
+    jp, tp = write_bom(res.bom, idx, o, stud_path.name, out, palette=palette)
     res.files["docs"] = [pi, pp, pdf, jp, tp]
     return res
 
@@ -940,14 +913,11 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default="output", help="output directory")
     ap.add_argument("--assets", default=None, help="directory with stud.stl")
     ap.add_argument("--reserve", type=float, default=5.0, help="reserve in %%")
-    ap.add_argument("--thickness", type=float, default=1.6, help="baseplate thickness in mm")
-    ap.add_argument("--base-color", default="BK", choices=[c.code for c in PALETTE])
     ap.add_argument("--dither", action="store_true")
     ap.add_argument("--no-autocontrast", action="store_true")
     ap.add_argument("--loose-all", action="store_true")
     a = ap.parse_args(argv)
     opts = Options(grid=a.grid, palette_mode=a.mode, reserve_pct=a.reserve,
-                   plate_thickness=a.thickness, base_color=a.base_color,
                    dither=a.dither, autocontrast=not a.no_autocontrast, loose_include_needed=a.loose_all)
     try:
         r = generate(a.image, a.out, a.assets, opts)
