@@ -24,12 +24,23 @@ with st.sidebar:
     palette_mode = "color" if mode_label == "Kleur" else "grayscale"
     selected_colors = None
     if palette_mode == "color":
-        all_codes = [color.code for color in L.COLOR_PALETTE]
-        selected_colors = tuple(st.multiselect(
-            "Colors to use", all_codes, default=all_codes,
-            format_func=lambda code: next(color.name_en for color in L.COLOR_PALETTE if color.code == code),
-            help="The mosaic will use only the colors selected here.",
-        ))
+        st.caption("Colors to use")
+        color_columns = st.columns(2)
+        selected_codes = []
+        for index, color in enumerate(L.COLOR_PALETTE):
+            with color_columns[index % 2]:
+                checkbox_col, swatch_col = st.columns([5, 1])
+                with checkbox_col:
+                    checked = st.checkbox(color.name_en, value=True, key=f"use_color_{color.code}")
+                with swatch_col:
+                    st.markdown(
+                        f'<div style="width:18px;height:18px;margin:7px auto;background:{color.hex};'
+                        'border:1px solid #888;border-radius:3px"></div>',
+                        unsafe_allow_html=True,
+                    )
+                if checked:
+                    selected_codes.append(color.code)
+        selected_colors = tuple(selected_codes)
     grid_size = st.selectbox("Format", [48, 30], index=0,
                              format_func=lambda x: f"{x}×{x} studs" + (" (1 plate)" if x == 30 else " (4 separate tiles of 24×24)"))
     reserve = st.number_input("Reserve (%)", 0.0, 100.0, 5.0, 1.0)
