@@ -432,7 +432,10 @@ def write_bambu_multi_plate_3mf(
     plate_configs: list[str] = []
     object_files: list[tuple[str, str]] = []
     wrapper_id = 2
-    plate_columns = 3
+    # Bambu Studio shows the project plates in a roughly square grid. Keep the
+    # global build-item arrangement in that same shape so plates 10+ do not
+    # appear as loose objects below the visible plate group.
+    plate_columns = max(1, math.ceil(math.sqrt(len(plates))))
     plate_stride = (bed_max_x - bed_min_x) * 1.2
 
     for plate_index, (plate_name, print_objects) in enumerate(plates):
@@ -813,7 +816,7 @@ def _profile_safe_positions(
     spacing: float,
     profile: dict,
     edge_margin: float = EDGE_MARGIN_MM,
-    safety_margin: float = 0.5,
+    safety_margin: float = 2.0,
 ) -> list[tuple[np.ndarray, list[tuple[int, int]]]]:
     """Pack studs into a bed grid while skipping any excluded or out-of-bed cell."""
     if count <= 0:
@@ -919,7 +922,7 @@ def _plate_fit_report(
     obj: PrintObject,
     profile: dict,
     edge_margin: float,
-    safety_margin: float = 0.5,
+    safety_margin: float = 2.0,
 ) -> tuple[bool, float, str | None]:
     """Validate a whole plate object; never trim studs or cells."""
     if obj.stud_centers is None or len(obj.stud_centers) == 0:
@@ -1087,8 +1090,8 @@ def _validate_bambu_3mf(path: Path, profile: dict, edge_margin: float = EDGE_MAR
                     raise MosaicError(
                         f"Object {object_id} is less than {edge_margin:g} mm from a printable-area edge."
                     )
-                if (exclude_min_x - 0.5 <= x <= exclude_max_x + 0.5
-                        and exclude_min_y - 0.5 <= y <= exclude_max_y + 0.5):
+                if (exclude_min_x - 2.0 <= x <= exclude_max_x + 2.0
+                        and exclude_min_y - 2.0 <= y <= exclude_max_y + 2.0):
                     raise MosaicError(f"Object {object_id} has a vertex in the printer exclusion area.")
             if world_points:
                 width = max(x for x, _ in world_points) - min(x for x, _ in world_points)
