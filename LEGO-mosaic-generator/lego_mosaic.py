@@ -49,11 +49,13 @@ COLOR_PALETTE: tuple[LegoColor, ...] = (
     LegoColor("JW", "Jadewit", "Jade White", (255, 255, 255)),
     LegoColor("BE", "Beige", "Beige", (247, 230, 222)),
     LegoColor("DT", "Desert Tan", "Desert Tan", (232, 219, 183)),
+    LegoColor("BG", "Brons/Goud", "Bronze/Gold", (221, 161, 94)),
     LegoColor("CB", "Cacaobruin", "Cocoa Brown", (111, 80, 52)),
-    LegoColor("RD", "Rood", "Red", (193, 46, 31)),
+    LegoColor("SP", "Sakura-roze", "Sakura Pink", (232, 162, 168)),
     LegoColor("BL", "Kobaltblauw", "Cobalt Blue", (0, 86, 184)),
     LegoColor("GN", "Bambu groen", "Bambu Green", (0, 174, 66)),
     LegoColor("SY", "Zonnebloemgeel", "Sunflower Yellow", (254, 198, 0)),
+    LegoColor("RD", "Rood", "Red", (193, 46, 31)),
 )
 GRAYSCALE_PALETTE: tuple[LegoColor, ...] = tuple(
     color for color in COLOR_PALETTE if color.code in {"BK", "DG", "JW"}
