@@ -15,6 +15,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 import numpy as np
@@ -242,6 +243,8 @@ class PrintObject:
     mesh: Mesh
     rgb: tuple[int, int, int]
     extruder: int
+    stud_centers: np.ndarray | None = None
+    stud_cells: list[tuple[int, int]] | None = None
 
 
 def write_3mf(path: Path, objects: list[PrintObject], title: str = "LEGO mosaic") -> None:
@@ -316,7 +319,7 @@ def write_bambu_multi_plate_3mf(
     plates: list[tuple[str, list[PrintObject]]],
     title: str = "LEGO mosaic",
     palette: tuple[LegoColor, ...] = COLOR_PALETTE,
-) -> None:
+) -> tuple[list[dict], list[str]]:
     """Write a Bambu Studio project using the object/plate structure in the
     supplied P1S reference project. Each input plate remains a separate plate;
     its objects keep their palette filament slot and all geometry is retained.
@@ -329,6 +332,31 @@ def write_bambu_multi_plate_3mf(
         return escape(value, {'"': "&quot;"})
     if len(palette) != 12:
         raise MosaicError("The Bambu P1S project requires the complete 12-color palette.")
+    profile = _load_bambu_profile()
+    bed_min_x, bed_min_y, bed_max_x, bed_max_y = _profile_bounds(profile, "printable_area")
+
+    # The reference format stores one model object on each plate. Split any
+    # multi-object plate before serialization, then remove only whole studs
+    # whose footprint violates the selected printer profile.
+    prepared_plates: list[tuple[str, list[PrintObject]]] = []
+    excluded_cells: list[dict] = []
+    for source_name, source_objects in plates:
+        for source_object in source_objects:
+            plate_name = source_name
+            if len(source_objects) > 1:
+                plate_name = f"{source_name} - {source_object.name.removeprefix('Studs ')}"
+            kept_object, removed = _filter_print_object_to_profile(source_object, profile)
+            if removed:
+                excluded_cells.append({
+                    "plate": plate_name,
+                    "color": source_object.name.removeprefix("Studs "),
+                    "cells": removed,
+                })
+            if kept_object is not None:
+                prepared_plates.append((plate_name, [kept_object]))
+    plates = prepared_plates
+    if not plates:
+        raise MosaicError("All studs fall outside the printable area or into the printer exclusion zone.")
 
     # The uploaded, working P1S project supplies the full set of printer,
     # process and filament settings that Bambu Studio expects.
@@ -349,6 +377,7 @@ def write_bambu_multi_plate_3mf(
         for row in range(slot_count) for col in range(slot_count)
     ]
     project_cfg["flush_volumes_vector"] = ["140"] * (slot_count * 2)
+    project_cfg["enable_prime_tower"] = "0"
     for key in ("wipe_tower_x", "wipe_tower_y"):
         values = project_cfg.get(key, ["165"] if key.endswith("_x") else ["250"])
         seed = values[-1] if values else ("165" if key.endswith("_x") else "250")
@@ -362,7 +391,7 @@ def write_bambu_multi_plate_3mf(
     object_files: list[tuple[str, str]] = []
     wrapper_id = 2
     plate_columns = 3
-    plate_stride = BED_MM * 1.2
+    plate_stride = (bed_max_x - bed_min_x) * 1.2
 
     for plate_index, (plate_name, print_objects) in enumerate(plates):
         instance_xml: list[str] = []
@@ -389,11 +418,10 @@ def write_bambu_multi_plate_3mf(
             lo, hi = print_object.mesh.bounds()
             center_x = float((lo[0] + hi[0]) / 2.0)
             center_y = float((lo[1] + hi[1]) / 2.0)
-            source_z = float(lo[2])
+            source_z = 0.0
             centered_vertices = vertices.copy()
             centered_vertices[:, 0] -= center_x
             centered_vertices[:, 1] -= center_y
-            centered_vertices[:, 2] -= source_z
 
             mesh_xml = [
                 '<?xml version="1.0" encoding="UTF-8"?>',
@@ -432,7 +460,7 @@ def write_bambu_multi_plate_3mf(
             build_items.append(
                 f'<item objectid="{wrapper_id}" p:UUID="{item_uuid}" '
                 f'transform="1 0 0 0 1 0 0 0 1 {plate_x + center_x:.6f} '
-                f'{plate_y + center_y:.6f} 0"/>'
+                f'{plate_y + center_y:.6f} 0" printable="1"/>'
             )
 
             safe_name = xml_attr(print_object.name)
@@ -503,12 +531,12 @@ def write_bambu_multi_plate_3mf(
         f'{"".join(settings_objects)}{"".join(plate_configs)}</config>'
     )
     cut_information = (
-        '<?xml version="1.0" encoding="UTF-8"?><cut_information>'
+        '<?xml version="1.0" encoding="UTF-8"?><objects>'
         + "".join(
             f'<object id="{index}"><cut_id id="0" check_sum="1" connectors_cnt="0"/></object>'
             for index in range(1, len(object_files) + 1)
         )
-        + '</cut_information>'
+        + '</objects>'
     )
     slice_info = (
         '<?xml version="1.0" encoding="UTF-8"?><config><header>'
@@ -539,6 +567,8 @@ def write_bambu_multi_plate_3mf(
         )
         archive.writestr("Metadata/slice_info.config", slice_info)
         archive.writestr("Metadata/cut_information.xml", cut_information)
+    _validate_bambu_3mf(path, profile)
+    return excluded_cells, [name for name, _ in plates]
 
 
 # --------------------------------------------------------------------------- #
@@ -639,7 +669,8 @@ def build_mosaic_tile_objects(sub_idx: np.ndarray, stud: Mesh, o: Options,
             z = np.full_like(x, base_z, dtype=float)
             pos = np.column_stack([x, y, z])
             objs.append(PrintObject(f"Studs {c.name_en}", tile_mesh(stud, pos), c.rgb,
-                                    filament_slot(c.code)))
+                                    filament_slot(c.code), pos,
+                                    [(int(r) + 1, int(col) + 1) for r, col in zip(r_sub, c_sub)]))
     return objs
 
 
@@ -664,6 +695,313 @@ def loose_positions(count: int, stud_w: float, o: Options) -> list[np.ndarray]:
         y = y0 + (j // cols) * o.loose_spacing
         beds.append(np.column_stack([x, y, np.zeros(k)]))
     return beds
+
+
+def _profile_points(values) -> list[tuple[float, float]]:
+    """Read Bambu's XxY polygon-coordinate lists without assuming a bed size."""
+    if isinstance(values, str):
+        values = re.split(r"[;,\s]+", values.strip())
+    points: list[tuple[float, float]] = []
+    for value in values or []:
+        match = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)x(-?\d+(?:\.\d+)?)\s*", str(value))
+        if match:
+            points.append((float(match.group(1)), float(match.group(2))))
+    return points
+
+
+def _load_bambu_profile(path: Path | None = None) -> dict:
+    profile_path = path or Path(__file__).resolve().parent / "assets" / "bambu_p1s_project_settings.json"
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MosaicError(f"Could not load the Bambu printer profile: {exc}") from exc
+    printable = _profile_points(profile.get("printable_area", []))
+    if len(printable) < 3:
+        raise MosaicError("The selected printer profile has no valid printable_area polygon.")
+    return profile
+
+
+def _profile_bounds(profile: dict, key: str) -> tuple[float, float, float, float]:
+    points = _profile_points(profile.get(key, []))
+    if not points:
+        if key == "bed_exclude_area":
+            return (math.inf, math.inf, -math.inf, -math.inf)
+        raise MosaicError(f"The printer profile has no valid {key} polygon.")
+    xs, ys = zip(*points)
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _point_in_polygon(x: float, y: float, polygon: list[tuple[float, float]]) -> bool:
+    """Return true for points inside or on the boundary of a profile polygon."""
+    inside = False
+    count = len(polygon)
+    for index, (x1, y1) in enumerate(polygon):
+        x2, y2 = polygon[(index + 1) % count]
+        cross = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1)
+        if abs(cross) < 1e-8 and min(x1, x2) - 1e-8 <= x <= max(x1, x2) + 1e-8 and min(y1, y2) - 1e-8 <= y <= max(y1, y2) + 1e-8:
+            return True
+        if (y1 > y) != (y2 > y):
+            crossing_x = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            if x < crossing_x:
+                inside = not inside
+    return inside
+
+
+def _profile_safe_positions(
+    count: int,
+    stud_mesh: Mesh,
+    spacing: float,
+    profile: dict,
+    safety_margin: float = 0.5,
+) -> list[tuple[np.ndarray, list[tuple[int, int]]]]:
+    """Pack studs into a bed grid while skipping any excluded or out-of-bed cell."""
+    if count <= 0:
+        return []
+    printable_min_x, printable_min_y, printable_max_x, printable_max_y = _profile_bounds(profile, "printable_area")
+    printable_polygon = _profile_points(profile.get("printable_area", []))
+    exclude_min_x, exclude_min_y, exclude_max_x, exclude_max_y = _profile_bounds(profile, "bed_exclude_area")
+    stud_min, stud_max = stud_mesh.bounds()
+    half_x = float((stud_max[0] - stud_min[0]) / 2.0)
+    half_y = float((stud_max[1] - stud_min[1]) / 2.0)
+
+    cols = int(max(0, (printable_max_x - printable_min_x - 2 * half_x) // spacing)) + 1
+    rows = int(max(0, (printable_max_y - printable_min_y - 2 * half_y) // spacing)) + 1
+    if not cols or not rows:
+        raise MosaicError("The printer bed is too small for the selected stud model.")
+    span_x, span_y = (cols - 1) * spacing, (rows - 1) * spacing
+    x0 = (printable_min_x + printable_max_x - span_x) / 2.0
+    y0 = (printable_min_y + printable_max_y - span_y) / 2.0
+
+    safe_slots: list[tuple[float, float, int, int]] = []
+    for row in range(rows):
+        cy = y0 + row * spacing
+        bottom, top = cy + stud_min[1], cy + stud_max[1]
+        if bottom < printable_min_y or top > printable_max_y:
+            continue
+        for col in range(cols):
+            cx = x0 + col * spacing
+            left, right = cx + stud_min[0], cx + stud_max[0]
+            footprint_corners = ((left, bottom), (left, top), (right, bottom), (right, top))
+            if (left < printable_min_x or right > printable_max_x
+                    or any(not _point_in_polygon(px, py, printable_polygon) for px, py in footprint_corners)):
+                continue
+            hits_exclusion = (
+                left <= exclude_max_x + safety_margin
+                and right >= exclude_min_x - safety_margin
+                and bottom <= exclude_max_y + safety_margin
+                and top >= exclude_min_y - safety_margin
+            )
+            if not hits_exclusion:
+                safe_slots.append((cx, cy, row + 1, col + 1))
+    if not safe_slots:
+        raise MosaicError("The printer profile has no printable stud positions outside its exclusion area.")
+
+    capacity = len(safe_slots)
+    result: list[tuple[np.ndarray, list[tuple[int, int]]]] = []
+    for start in range(0, count, capacity):
+        slots = safe_slots[:min(capacity, count - start)]
+        positions = np.asarray([(x, y, 0.0) for x, y, _, _ in slots], dtype=np.float64)
+        cells = [(row, col) for _, _, row, col in slots]
+        result.append((positions, cells))
+    return result
+
+
+def _filter_print_object_to_profile(
+    obj: PrintObject,
+    profile: dict,
+    safety_margin: float = 0.5,
+) -> tuple[PrintObject | None, list[tuple[int, int]]]:
+    """Drop whole studs whose vertex footprint hits an exclusion or bed edge."""
+    if obj.stud_centers is None or len(obj.stud_centers) == 0:
+        raise MosaicError(f"Cannot verify printer-bed clearance for '{obj.name}': stud positions are missing.")
+    centers = np.asarray(obj.stud_centers, dtype=np.float64).reshape(-1, 3)
+    stud_count = len(centers)
+    if len(obj.mesh.vertices) % stud_count or len(obj.mesh.faces) % stud_count:
+        raise MosaicError(f"Cannot verify printer-bed clearance for '{obj.name}': mesh is not grouped by stud.")
+
+    vertices_per_stud = len(obj.mesh.vertices) // stud_count
+    faces_per_stud = len(obj.mesh.faces) // stud_count
+    if not vertices_per_stud or not faces_per_stud:
+        raise MosaicError(f"'{obj.name}' contains incomplete stud geometry.")
+    local_vertices = obj.mesh.vertices[:vertices_per_stud] - centers[0]
+    local_min = local_vertices.min(axis=0)
+    local_max = local_vertices.max(axis=0)
+    bed_min_x, bed_min_y, bed_max_x, bed_max_y = _profile_bounds(profile, "printable_area")
+    bed_polygon = _profile_points(profile.get("printable_area", []))
+    excl_min_x, excl_min_y, excl_max_x, excl_max_y = _profile_bounds(profile, "bed_exclude_area")
+
+    keep_indices: list[int] = []
+    removed_cells: list[tuple[int, int]] = []
+    cells = obj.stud_cells or [(index + 1, 1) for index in range(stud_count)]
+    if len(cells) != stud_count:
+        raise MosaicError(f"Cannot report omitted cells for '{obj.name}': cell list does not match its studs.")
+    for index, center in enumerate(centers):
+        left, bottom = center[0] + local_min[0], center[1] + local_min[1]
+        right, top = center[0] + local_max[0], center[1] + local_max[1]
+        footprint_corners = ((left, bottom), (left, top), (right, bottom), (right, top))
+        outside = (
+            left < bed_min_x or bottom < bed_min_y or right > bed_max_x or top > bed_max_y
+            or any(not _point_in_polygon(x, y, bed_polygon) for x, y in footprint_corners)
+        )
+        intersects_exclusion = (
+            left <= excl_max_x + safety_margin
+            and right >= excl_min_x - safety_margin
+            and bottom <= excl_max_y + safety_margin
+            and top >= excl_min_y - safety_margin
+        )
+        if outside or intersects_exclusion:
+            removed_cells.append(cells[index])
+        else:
+            keep_indices.append(index)
+
+    if not keep_indices:
+        return None, removed_cells
+    vertex_blocks = [
+        obj.mesh.vertices[index * vertices_per_stud:(index + 1) * vertices_per_stud]
+        for index in keep_indices
+    ]
+    face_blocks = []
+    for new_index, old_index in enumerate(keep_indices):
+        block = obj.mesh.faces[old_index * faces_per_stud:(old_index + 1) * faces_per_stud]
+        face_blocks.append(block - old_index * vertices_per_stud + new_index * vertices_per_stud)
+    kept = PrintObject(
+        obj.name,
+        Mesh(np.vstack(vertex_blocks), np.vstack(face_blocks)),
+        obj.rgb,
+        obj.extruder,
+        centers[keep_indices],
+        [cells[index] for index in keep_indices],
+    )
+    return kept, removed_cells
+
+
+def _validate_bambu_3mf(path: Path, profile: dict) -> None:
+    """Check the generated package, references, mesh indices, slots and bed bounds."""
+    core_ns = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+    p_ns = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
+    ns = {"c": core_ns, "p": p_ns}
+    with zipfile.ZipFile(path, "r") as archive:
+        bad_entry = archive.testzip()
+        if bad_entry:
+            raise MosaicError(f"The generated 3MF archive is corrupt at {bad_entry}.")
+        names = set(archive.namelist())
+        required = {
+            "[Content_Types].xml", "_rels/.rels", "3D/3dmodel.model",
+            "3D/_rels/3dmodel.model.rels", "Metadata/model_settings.config",
+            "Metadata/project_settings.config", "Metadata/slice_info.config",
+            "Metadata/cut_information.xml",
+        }
+        if not required.issubset(names):
+            raise MosaicError("The generated 3MF is missing required Bambu Studio files.")
+        for name in names:
+            if name.endswith((".model", ".config", ".xml", ".rels")) and name != "Metadata/project_settings.config":
+                try:
+                    ET.fromstring(archive.read(name))
+                except ET.ParseError as exc:
+                    raise MosaicError(f"Invalid XML in {name}: {exc}") from exc
+        root = ET.fromstring(archive.read("3D/3dmodel.model"))
+        model_rels = ET.fromstring(archive.read("3D/_rels/3dmodel.model.rels"))
+        rel_targets = {
+            relation.get("Target", "").lstrip("/")
+            for relation in model_rels
+            if relation.get("Type", "").endswith("/2013/01/3dmodel")
+        }
+        wrapper_to_mesh: dict[str, tuple[str, str]] = {}
+        for wrapper in root.findall("c:resources/c:object", ns):
+            wrapper_id = wrapper.get("id", "")
+            component = wrapper.find("c:components/c:component", ns)
+            if component is None:
+                raise MosaicError(f"Wrapper object {wrapper_id} has no mesh component.")
+            object_path = component.get(f"{{{p_ns}}}path", "").lstrip("/")
+            inner_id = component.get("objectid", "")
+            if object_path not in names or object_path not in rel_targets:
+                raise MosaicError(f"Wrapper object {wrapper_id} points to a missing mesh file.")
+            inner_root = ET.fromstring(archive.read(object_path))
+            inner_object = next(
+                (obj for obj in inner_root.findall("c:resources/c:object", ns)
+                 if obj.get("id") == inner_id),
+                None,
+            )
+            if inner_object is None:
+                raise MosaicError(f"Component object {inner_id} is missing from {object_path}.")
+            vertices = inner_object.findall("c:mesh/c:vertices/c:vertex", ns)
+            triangles = inner_object.findall("c:mesh/c:triangles/c:triangle", ns)
+            for triangle in triangles:
+                for key in ("v1", "v2", "v3"):
+                    vertex_index = int(triangle.get(key, "-1"))
+                    if vertex_index < 0 or vertex_index >= len(vertices):
+                        raise MosaicError(f"A mesh index in {object_path} exceeds its vertex count.")
+            wrapper_to_mesh[wrapper_id] = (object_path, inner_id)
+
+        model_settings = ET.fromstring(archive.read("Metadata/model_settings.config"))
+        settings_objects = {
+            item.get("id", ""): item for item in model_settings.findall("object")
+        }
+        plates = model_settings.findall("plate")
+        if len(plates) != len(wrapper_to_mesh):
+            raise MosaicError("Each Bambu plate must contain exactly one model object.")
+        printable_min_x, printable_min_y, printable_max_x, printable_max_y = _profile_bounds(profile, "printable_area")
+        printable_polygon = _profile_points(profile.get("printable_area", []))
+        exclude_min_x, exclude_min_y, exclude_max_x, exclude_max_y = _profile_bounds(profile, "bed_exclude_area")
+        for plate in plates:
+            instances = plate.findall("model_instance")
+            if len(instances) != 1:
+                raise MosaicError("Each Bambu plate must contain exactly one model instance.")
+            object_id = next(
+                (meta.get("value", "") for meta in instances[0].findall("metadata")
+                 if meta.get("key") == "object_id"),
+                "",
+            )
+            if object_id not in wrapper_to_mesh or object_id not in settings_objects:
+                raise MosaicError(f"Plate references unknown wrapper object {object_id}.")
+            obj_settings = settings_objects[object_id]
+            extruder = next(
+                (meta.get("value", "") for meta in obj_settings.findall("metadata")
+                 if meta.get("key") == "extruder"),
+                "",
+            )
+            if not extruder.isdigit() or not 1 <= int(extruder) <= len(COLOR_PALETTE):
+                raise MosaicError(f"Object {object_id} has an invalid filament slot.")
+            part = obj_settings.find("part")
+            if part is None:
+                raise MosaicError(f"Object {object_id} has no part block.")
+            source_x = source_y = 0.0
+            for meta in part.findall("metadata"):
+                if meta.get("key") == "source_offset_x":
+                    source_x = float(meta.get("value", "0"))
+                elif meta.get("key") == "source_offset_y":
+                    source_y = float(meta.get("value", "0"))
+            object_path, inner_id = wrapper_to_mesh[object_id]
+            inner_root = ET.fromstring(archive.read(object_path))
+            inner = next(obj for obj in inner_root.findall("c:resources/c:object", ns) if obj.get("id") == inner_id)
+            for vertex in inner.findall("c:mesh/c:vertices/c:vertex", ns):
+                x = float(vertex.get("x", "0")) + source_x
+                y = float(vertex.get("y", "0")) + source_y
+                if (not printable_min_x <= x <= printable_max_x
+                        or not printable_min_y <= y <= printable_max_y
+                        or not _point_in_polygon(x, y, printable_polygon)):
+                    raise MosaicError(f"Object {object_id} extends outside the selected printable area.")
+                if (exclude_min_x - 0.5 <= x <= exclude_max_x + 0.5
+                        and exclude_min_y - 0.5 <= y <= exclude_max_y + 0.5):
+                    raise MosaicError(f"Object {object_id} has a vertex in the printer exclusion area.")
+
+        project_cfg = json.loads(archive.read("Metadata/project_settings.config"))
+        slot_count = len(COLOR_PALETTE)
+        colors = [color.hex for color in COLOR_PALETTE]
+        if project_cfg.get("filament_colour") != colors:
+            raise MosaicError("The project profile does not contain the exact 12-color palette.")
+        if project_cfg.get("filament_map") != ["1"] * slot_count:
+            raise MosaicError("Filament slots must map to the single P1S nozzle.")
+        if len(project_cfg.get("flush_volumes_matrix", [])) != slot_count * slot_count:
+            raise MosaicError("The filament flush matrix must contain 144 values.")
+        if len(project_cfg.get("flush_volumes_vector", [])) != slot_count * 2:
+            raise MosaicError("The filament flush vector must contain 24 values.")
+        if len(project_cfg.get("wipe_tower_x", [])) != len(plates) or len(project_cfg.get("wipe_tower_y", [])) != len(plates):
+            raise MosaicError("Wipe tower coordinates must have one value per plate.")
+
+        cut_info = ET.fromstring(archive.read("Metadata/cut_information.xml"))
+        if len(cut_info.findall("object")) != len(wrapper_to_mesh):
+            raise MosaicError("Cut information must contain one entry per exported object.")
 
 
 # --------------------------------------------------------------------------- #
@@ -796,6 +1134,7 @@ class Result:
     files: dict[str, list[Path]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     project_plate_names: list[str] = field(default_factory=list)
+    excluded_cells: list[dict] = field(default_factory=list)
 
     def all_files(self) -> list[Path]:
         return [p for v in self.files.values() for p in v]
@@ -817,9 +1156,12 @@ def _filename_slug(value: str) -> str:
 def generate(image_source, out_dir: str | Path = "output",
              assets_dir: str | Path | None = None, options: Options | None = None) -> Result:
     o = options or Options()
+    here = Path(__file__).resolve().parent
+    profile = _load_bambu_profile(here / "assets" / "bambu_p1s_project_settings.json")
+    bed_min_x, bed_min_y, bed_max_x, bed_max_y = _profile_bounds(profile, "printable_area")
+    o.bed = bed_max_x - bed_min_x
     _validate(o)
     palette = palette_for_mode(o.palette_mode, o.selected_colors)
-    here = Path(__file__).resolve().parent
     assets = Path(assets_dir) if assets_dir else here / "assets"
     out = Path(out_dir)
     try:
@@ -846,13 +1188,14 @@ def generate(image_source, out_dir: str | Path = "output",
     if o.grid in (48, 60):
         half = o.grid // 2
         tile_size_mm = half * o.pitch
-        origin = (o.bed - tile_size_mm) / 2
+        origin_x = (bed_min_x + bed_max_x - tile_size_mm) / 2
+        origin_y = (bed_min_y + bed_max_y - tile_size_mm) / 2
         plate_files = []
         tile_names = ("Top-left", "Top-right", "Bottom-left", "Bottom-right")
         for tile_number, (r_idx, c_idx) in enumerate(((0, 0), (0, 1), (1, 0), (1, 1)), start=1):
             if o.palette_mode == "grayscale":
                 sub = idx[r_idx*half:(r_idx+1)*half, c_idx*half:(c_idx+1)*half]
-                tile_objs = build_mosaic_tile_objects(sub, stud, o, origin, origin, 0.0, palette)
+                tile_objs = build_mosaic_tile_objects(sub, stud, o, origin_x, origin_y, 0.0, palette)
                 for tobj in tile_objs:
                     tobj.name = f"{tile_names[tile_number - 1]} - {tobj.name}"
                 project_plates.append((f"Mosaic - {tile_names[tile_number - 1]}", tile_objs))
@@ -867,8 +1210,9 @@ def generate(image_source, out_dir: str | Path = "output",
     else:
         if o.palette_mode == "grayscale":
             size = o.grid * o.pitch
-            origin = (o.bed - size) / 2
-            tile_objs = build_mosaic_tile_objects(idx, stud, o, origin, origin, 0.0, palette)
+            origin_x = (bed_min_x + bed_max_x - size) / 2
+            origin_y = (bed_min_y + bed_max_y - size) / 2
+            tile_objs = build_mosaic_tile_objects(idx, stud, o, origin_x, origin_y, 0.0, palette)
             project_plates.append((f"Mosaic {o.grid}x{o.grid}", tile_objs))
             p3mf, pstl = out / f"mosaic_plate_{o.grid}x{o.grid}.3mf", out / f"mosaic_plate_{o.grid}x{o.grid}.stl"
             write_3mf(p3mf, tile_objs, f"LEGO mosaic {o.grid}x{o.grid}")
@@ -918,13 +1262,15 @@ def generate(image_source, out_dir: str | Path = "output",
             count = int(np.count_nonzero(idx == color_index))
             if count == 0:
                 continue
-            positions_by_plate = loose_positions(count, stud_w, o)
-            for plate_index, positions in enumerate(positions_by_plate, start=1):
+            positions_by_plate = _profile_safe_positions(count, stud, o.loose_spacing, profile)
+            for plate_index, (positions, cells) in enumerate(positions_by_plate, start=1):
                 stud_object = PrintObject(
                     f"Studs {color.name_en}",
                     tile_mesh(stud, positions),
                     color.rgb,
                     filament_slot(color.code),
+                    positions,
+                    cells,
                 )
                 project_plates.append(
                     (f"{color.name_en} - Plate {plate_index}", [stud_object])
@@ -946,14 +1292,15 @@ def generate(image_source, out_dir: str | Path = "output",
     res.files["color_plates"] = color_plate_files
 
     project_path = out / "lego_mosaic_bambu_project.3mf"
-    write_bambu_multi_plate_3mf(
+    excluded_cells, exported_plate_names = write_bambu_multi_plate_3mf(
         project_path,
         project_plates,
         f"LEGO Mosaic {o.grid}x{o.grid}",
         palette=COLOR_PALETTE,
     )
     res.files["bambu_project"] = [project_path]
-    res.project_plate_names = [name for name, objects in project_plates if objects]
+    res.project_plate_names = exported_plate_names
+    res.excluded_cells = excluded_cells
 
     pi, pp = out / "building_instructions.png", out / "mosaic_preview.png"
     render_instructions(idx, res.bom, pi, palette=palette)

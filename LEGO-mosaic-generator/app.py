@@ -156,6 +156,13 @@ if res:
     for w in res.warnings:
         st.warning(w)
     st.markdown(f'<div class="result-meta">✓ Mosaic ready&nbsp;&nbsp;·&nbsp;&nbsp;{len(res.project_plate_names)} print plates</div>', unsafe_allow_html=True)
+    if res.excluded_cells:
+        st.warning("Some studs were omitted to respect the printer bed and exclusion area.")
+        for entry in res.excluded_cells:
+            cells = ", ".join(f"R{row}C{col}" for row, col in entry["cells"])
+            st.caption(f'{entry["plate"]} ({entry["color"]}): {cells}')
+    else:
+        st.caption("Excluded cells: none. All exported studs fit the selected printer profile.")
     preview_col, bom_col = st.columns([1.25, 1], gap="large")
     with preview_col:
         with st.container(border=True):
