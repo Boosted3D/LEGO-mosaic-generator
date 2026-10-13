@@ -249,6 +249,7 @@ class PrintObject:
     extruder: int
     stud_centers: np.ndarray | None = None
     stud_cells: list[tuple[int, int]] | None = None
+    brim_override: str | None = None
 
 
 def write_3mf(path: Path, objects: list[PrintObject], title: str = "LEGO mosaic") -> None:
@@ -342,8 +343,20 @@ def write_bambu_multi_plate_3mf(
     profile = _load_bambu_profile()
     bed_min_x, bed_min_y, bed_max_x, bed_max_y = _profile_bounds(profile, "printable_area")
 
-    # Choose rotation before validating the printable-area margin. Current
-    # plate contents are preserved as-is; no studs or cells are ever dropped.
+    # Load the exact project profile before placing objects. The exclusion
+    # polygon and brim settings must come from this profile, not constants.
+    template_path = Path(__file__).resolve().parent / "assets" / "bambu_p1s_project_settings.json"
+    try:
+        project_cfg = json.loads(template_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MosaicError(f"Could not load the Bambu P1S project profile: {exc}") from exc
+    brim_type = str(project_cfg.get("brim_type", "no_brim"))
+    brim_width = float(project_cfg.get("brim_width", "0") or 0)
+    brim_gap = float(project_cfg.get("brim_object_gap", "0") or 0)
+    brim_clearance = brim_width + brim_gap + 0.2 if brim_type != "no_brim" else 0.0
+
+    # Rotate first, then put each convex hull at the bed center. If that
+    # intersects the exclusion zone, move minimally (Y before X).
     prepared_plates: list[tuple[str, list[PrintObject]]] = []
     bed_center = ((bed_min_x + bed_max_x) / 2.0, (bed_min_y + bed_max_y) / 2.0)
     for source_name, source_objects in plates:
@@ -352,7 +365,25 @@ def write_bambu_multi_plate_3mf(
             if len(source_objects) > 1:
                 plate_name = f"{source_name} - {source_object.name.removeprefix('Studs ')}"
             rotated = _transform_print_object_xy(source_object, bed_center, rotation_degrees)
-            prepared_plates.append((plate_name, [rotated]))
+            pieces = [(plate_name, rotated)]
+            placed: list[tuple[str, PrintObject]] = []
+            while pieces:
+                name, obj = pieces.pop(0)
+                try:
+                    positioned, _details = _center_object_on_bed(
+                        obj, profile, bed_center, edge_margin, brim_clearance
+                    )
+                    placed.append((name, positioned))
+                except MosaicError:
+                    split = _split_print_object(obj)
+                    if not split:
+                        raise
+                    pieces[0:0] = [
+                        (f"{name} - part {index}", part)
+                        for index, part in enumerate(split, start=1)
+                    ]
+            for name, obj in placed:
+                prepared_plates.append((name, [obj]))
     plates = prepared_plates
     if not plates:
         raise MosaicError("No print plates were generated.")
@@ -363,8 +394,8 @@ def write_bambu_multi_plate_3mf(
         for plate_name, plate_objects in candidate:
             distances = []
             for obj in plate_objects:
-                fits, distance, reason = _plate_fit_report(obj, profile, edge_margin)
-                distances.append(distance)
+                fits, details, reason = _plate_fit_report(obj, profile, edge_margin)
+                distances.append(details["edge_clearance_mm"])
                 if not fits and first_problem is None:
                     first_problem = (plate_name, reason or "unknown bed-fit error")
             report.append({"plate": plate_name, "clearance_mm": min(distances) if distances else 0.0})
@@ -399,14 +430,6 @@ def write_bambu_multi_plate_3mf(
         problem, edge_clearance = check_fit(plates)
         if problem:
             raise MosaicError(_fit_message(problem[0], problem[1], edge_margin))
-
-    # The uploaded, working P1S project supplies the full set of printer,
-    # process and filament settings that Bambu Studio expects.
-    template_path = Path(__file__).resolve().parent / "assets" / "bambu_p1s_project_settings.json"
-    try:
-        project_cfg = json.loads(template_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise MosaicError(f"Could not load the Bambu P1S project profile: {exc}") from exc
 
     slot_count = len(palette)
     project_cfg["filament_colour"] = [color.hex for color in palette]
@@ -514,18 +537,20 @@ def write_bambu_multi_plate_3mf(
                 f'<object id="{wrapper_id}">'
                 f'<metadata key="name" value="{safe_name}"/>'
                 f'<metadata key="extruder" value="{print_object.extruder}"/>'
-                f'<metadata face_count="{face_count}"/>'
-                f'<part id="{inner_id}" subtype="normal_part">'
-                f'<metadata key="name" value="{safe_name}"/>'
-                '<metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>'
-                '<metadata key="source_object_id" value="0"/>'
-                '<metadata key="source_volume_id" value="0"/>'
-                f'<metadata key="source_offset_x" value="{center_x:.6f}"/>'
-                f'<metadata key="source_offset_y" value="{center_y:.6f}"/>'
-                f'<metadata key="source_offset_z" value="{source_z:.6f}"/>'
-                f'<mesh_stat face_count="{face_count}" edges_fixed="0" '
-                'degenerate_facets="0" facets_removed="0" facets_reversed="0" backwards_edges="0"/>'
-                '</part></object>'
+                + ('<metadata key="brim_type" value="no_brim"/>' if print_object.brim_override == "no_brim" else '')
+                + (
+                    f'<metadata face_count="{face_count}"/><part id="{inner_id}" subtype="normal_part">'
+                    f'<metadata key="name" value="{safe_name}"/>'
+                    '<metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>'
+                    '<metadata key="source_object_id" value="0"/>'
+                    '<metadata key="source_volume_id" value="0"/>'
+                    f'<metadata key="source_offset_x" value="{center_x:.6f}"/>'
+                    f'<metadata key="source_offset_y" value="{center_y:.6f}"/>'
+                    f'<metadata key="source_offset_z" value="{source_z:.6f}"/>'
+                    f'<mesh_stat face_count="{face_count}" edges_fixed="0" '
+                    'degenerate_facets="0" facets_removed="0" facets_reversed="0" backwards_edges="0"/>'
+                    '</part></object>'
+                )
             )
             instance_xml.append(
                 '<model_instance>'
@@ -613,7 +638,17 @@ def write_bambu_multi_plate_3mf(
         archive.writestr("Metadata/slice_info.config", slice_info)
         archive.writestr("Metadata/cut_information.xml", cut_information)
     _validate_bambu_3mf(path, profile, edge_margin)
-    return [name for name, _ in plates], applied_scale, edge_clearance
+    # Rebuild placement results after any optional uniform scaling.
+    placement_reports = []
+    for plate_name, objects in plates:
+        obj = objects[0]
+        _, details, _ = _plate_fit_report(obj, profile, edge_margin)
+        placement_reports.append({
+            "plate": plate_name,
+            **details,
+            "brim_disabled": obj.brim_override == "no_brim",
+        })
+    return [name for name, _ in plates], applied_scale, placement_reports
 
 
 # --------------------------------------------------------------------------- #
@@ -915,57 +950,289 @@ def _transform_print_object_xy(
         obj.extruder,
         centers,
         None if obj.stud_cells is None else list(obj.stud_cells),
+        obj.brim_override,
     )
+
+
+def _convex_hull_xy(points: np.ndarray) -> list[tuple[float, float]]:
+    """Return the monotone-chain convex hull of mesh XY vertices."""
+    unique = np.unique(np.asarray(points, dtype=np.float64)[:, :2], axis=0)
+    ordered = sorted((float(x), float(y)) for x, y in unique)
+    if len(ordered) <= 2:
+        return ordered
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for point in ordered:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 1e-10:
+            lower.pop()
+        lower.append(point)
+    upper = []
+    for point in reversed(ordered):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 1e-10:
+            upper.pop()
+        upper.append(point)
+    return lower[:-1] + upper[:-1]
+
+
+def _segments_intersect(a, b, c, d) -> bool:
+    def orient(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    ab_c, ab_d, cd_a, cd_b = orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b)
+    if (ab_c * ab_d < -1e-12) and (cd_a * cd_b < -1e-12):
+        return True
+    return any(
+        abs(value) <= 1e-10 and min(p[0], q[0]) - 1e-10 <= r[0] <= max(p[0], q[0]) + 1e-10
+        and min(p[1], q[1]) - 1e-10 <= r[1] <= max(p[1], q[1]) + 1e-10
+        for value, p, q, r in (
+            (ab_c, a, b, c), (ab_d, a, b, d), (cd_a, c, d, a), (cd_b, c, d, b)
+        )
+    )
+
+
+def _hull_rect_distance(hull: list[tuple[float, float]], rect: tuple[float, float, float, float]) -> float:
+    """Minimum distance between a convex hull and an axis-aligned rectangle."""
+    xmin, ymin, xmax, ymax = rect
+    corners = [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]
+    if any(xmin <= x <= xmax and ymin <= y <= ymax for x, y in hull):
+        return 0.0
+    if len(hull) >= 3 and all(
+        _point_in_polygon(x, y, hull) for x, y in corners
+    ):
+        return 0.0
+    edges = list(zip(hull, hull[1:] + hull[:1]))
+    rect_edges = list(zip(corners, corners[1:] + corners[:1]))
+    if any(_segments_intersect(a, b, c, d) for a, b in edges for c, d in rect_edges):
+        return 0.0
+
+    def point_rect_distance(point):
+        dx = max(xmin - point[0], 0.0, point[0] - xmax)
+        dy = max(ymin - point[1], 0.0, point[1] - ymax)
+        return math.hypot(dx, dy)
+
+    distances = [point_rect_distance(point) for point in hull]
+    for corner in corners:
+        distances.extend(_point_segment_distance(corner[0], corner[1], a, b) for a, b in edges)
+    return min(distances, default=math.inf)
+
+
+def _shift_print_object_xy(obj: PrintObject, dx: float, dy: float, brim_override=None) -> PrintObject:
+    vertices = obj.mesh.vertices.copy()
+    vertices[:, 0] += dx
+    vertices[:, 1] += dy
+    centers = None if obj.stud_centers is None else np.asarray(obj.stud_centers).copy()
+    if centers is not None:
+        centers[:, 0] += dx
+        centers[:, 1] += dy
+    return PrintObject(
+        obj.name, Mesh(vertices, obj.mesh.faces.copy()), obj.rgb, obj.extruder,
+        centers, None if obj.stud_cells is None else list(obj.stud_cells),
+        obj.brim_override if brim_override is None else brim_override,
+    )
+
+
+def _center_object_on_bed(
+    obj: PrintObject,
+    profile: dict,
+    bed_center: tuple[float, float],
+    edge_margin: float,
+    brim_clearance: float,
+) -> tuple[PrintObject, dict]:
+    """Center a hull, then apply the smallest Y-first/X-second safe shift."""
+    hull = _convex_hull_xy(obj.mesh.vertices)
+    if not hull:
+        raise MosaicError(f"Cannot place empty object '{obj.name}'.")
+    bed_bounds = _profile_bounds(profile, "printable_area")
+    printable_poly = _profile_points(profile.get("printable_area", []))
+    exclusion_poly = _profile_points(profile.get("bed_exclude_area", []))
+    exclude = _profile_bounds(profile, "bed_exclude_area")
+    def status(dx, dy, hull_points, brim):
+        moved = [(x + dx, y + dy) for x, y in hull_points]
+        xs, ys = zip(*moved)
+        edge_clearance = min(
+            _distance_to_polygon_edges(x, y, printable_poly) for x, y in moved
+        )
+        inside = all(_point_in_polygon(x, y, printable_poly) for x, y in moved)
+        edge_ok = inside and edge_clearance + 1e-8 >= edge_margin + brim
+        exclusion_gap = _hull_rect_distance(moved, exclude) if exclusion_poly else math.inf
+        exclusion_ok = exclusion_gap + 1e-8 >= brim + 0.02
+        bounds_ok = (
+            min(xs) >= bed_bounds[0] + edge_margin + brim - 1e-8
+            and min(ys) >= bed_bounds[1] + edge_margin + brim - 1e-8
+            and max(xs) <= bed_bounds[2] - edge_margin - brim + 1e-8
+            and max(ys) <= bed_bounds[3] - edge_margin - brim + 1e-8
+        )
+        return edge_ok and exclusion_ok and bounds_ok, edge_clearance, exclusion_gap, (min(xs), min(ys), max(xs), max(ys))
+
+    lo_x, lo_y = min(x for x, _ in hull), min(y for _, y in hull)
+    hi_x, hi_y = max(x for x, _ in hull), max(y for _, y in hull)
+    desired_x, desired_y = bed_center[0] - (lo_x + hi_x) / 2, bed_center[1] - (lo_y + hi_y) / 2
+
+    def find_safe(brim):
+        ok, edge_dist, exclusion_gap, bounds = status(desired_x, desired_y, hull, brim)
+        if ok:
+            return desired_x, desired_y, edge_dist, exclusion_gap, bounds
+
+        def search_axis(axis, direction):
+            dx0, dy0 = desired_x, desired_y
+            hmin, hmax = (lo_x, hi_x) if axis == 0 else (lo_y, hi_y)
+            bedmin, bedmax = (bed_bounds[0], bed_bounds[2]) if axis == 0 else (bed_bounds[1], bed_bounds[3])
+            current = dx0 if axis == 0 else dy0
+            lower, upper = bedmin + edge_margin + brim - hmin, bedmax - edge_margin - brim - hmax
+            max_move = (upper - current) if direction > 0 else (current - lower)
+            if max_move <= 1e-8:
+                return None
+
+            def candidate(amount):
+                dx, dy = dx0, dy0
+                if axis == 0:
+                    dx += direction * amount
+                else:
+                    dy += direction * amount
+                return dx, dy
+
+            end_dx, end_dy = candidate(max_move)
+            if not status(end_dx, end_dy, hull, brim)[0]:
+                return None
+            low, high = 0.0, max_move
+            for _ in range(48):
+                mid = (low + high) / 2
+                cdx, cdy = candidate(mid)
+                if status(cdx, cdy, hull, brim)[0]:
+                    high = mid
+                else:
+                    low = mid
+            dx, dy = candidate(high + 1e-5)
+            return dx, dy, *status(dx, dy, hull, brim)[1:]
+
+        # User-requested preference: resolve along Y first, then X.
+        for axis in (1, 0):
+            options = [search_axis(axis, direction) for direction in (1, -1)]
+            options = [option for option in options if option is not None]
+            if options:
+                return min(options, key=lambda item: math.hypot(item[0] - desired_x, item[1] - desired_y))
+        return None
+
+    selected_brim = brim_clearance
+    chosen = find_safe(selected_brim)
+    brim_override = None
+    if chosen is None and brim_clearance > 0:
+        chosen = find_safe(0.0)
+        if chosen is not None:
+            brim_override = "no_brim"
+            selected_brim = 0.0
+    if chosen is None:
+        raise MosaicError(
+            f"Object '{obj.name}' cannot fit inside the printable area, even without a brim; it must be split."
+        )
+
+    dx, dy, edge_clearance, exclusion_gap, bounds = chosen
+    placed = _shift_print_object_xy(obj, dx, dy, brim_override)
+    return placed, {
+        "position_mm": (round((lo_x + hi_x) / 2 + dx, 3), round((lo_y + hi_y) / 2 + dy, 3)),
+        "center_shift_mm": (round(dx, 3), round(dy, 3)),
+        "edge_clearance_mm": round(edge_clearance, 3),
+        "exclusion_clearance_mm": round(max(0.0, exclusion_gap - selected_brim), 3),
+        "brim_clearance_mm": round(selected_brim, 3),
+        "brim_disabled": brim_override == "no_brim",
+    }
+
+
+def _split_print_object(obj: PrintObject) -> list[PrintObject]:
+    """Split a stud-grouped mesh at its widest center coordinate without altering studs."""
+    centers = obj.stud_centers
+    if centers is None or len(centers) < 2:
+        return []
+    vertex_count = len(obj.mesh.vertices) // len(centers)
+    face_count = len(obj.mesh.faces) // len(centers)
+    if not vertex_count or not face_count or vertex_count * len(centers) != len(obj.mesh.vertices):
+        return []
+    xy = np.asarray(centers)[:, :2]
+    axis = int(np.argmax(np.ptp(xy, axis=0)))
+    order = np.argsort(xy[:, axis], kind="stable")
+    midpoint = len(order) // 2
+    groups = (order[:midpoint], order[midpoint:])
+    result = []
+    for group in groups:
+        vertices_parts, faces_parts, center_parts, cell_parts = [], [], [], []
+        for stud_index in group:
+            v0, v1 = int(stud_index) * vertex_count, (int(stud_index) + 1) * vertex_count
+            f0, f1 = int(stud_index) * face_count, (int(stud_index) + 1) * face_count
+            vertices_parts.append(obj.mesh.vertices[v0:v1])
+            faces_parts.append(obj.mesh.faces[f0:f1] - v0)
+            center_parts.append(centers[int(stud_index)])
+            if obj.stud_cells is not None:
+                cell_parts.append(obj.stud_cells[int(stud_index)])
+        vertices = np.concatenate(vertices_parts)
+        faces = np.concatenate([
+            faces + index * vertex_count for index, faces in enumerate(faces_parts)
+        ])
+        result.append(PrintObject(
+            obj.name, Mesh(vertices, faces), obj.rgb, obj.extruder,
+            np.asarray(center_parts), cell_parts if obj.stud_cells is not None else None,
+        ))
+    return result
 
 
 def _plate_fit_report(
     obj: PrintObject,
     profile: dict,
     edge_margin: float,
-    safety_margin: float = 2.0,
-) -> tuple[bool, float, str | None]:
-    """Validate a whole plate object; never trim studs or cells."""
-    if obj.stud_centers is None or len(obj.stud_centers) == 0:
-        raise MosaicError(f"Cannot verify bed clearance for '{obj.name}': stud positions are missing.")
-    centers = np.asarray(obj.stud_centers, dtype=np.float64).reshape(-1, 3)
-    if len(obj.mesh.vertices) % len(centers) or len(obj.mesh.faces) % len(centers):
-        raise MosaicError(f"Cannot verify bed clearance for '{obj.name}': mesh is not grouped by stud.")
-
-    vertices_per_stud = len(obj.mesh.vertices) // len(centers)
-    if not vertices_per_stud:
-        raise MosaicError(f"'{obj.name}' contains incomplete stud geometry.")
-    lo, hi = obj.mesh.bounds()
+    brim_clearance: float | None = None,
+) -> tuple[bool, dict, str | None]:
+    """Validate the convex hull, including brim, against bed and exclusion."""
+    if brim_clearance is None:
+        brim_type = str(profile.get("brim_type", "no_brim"))
+        brim_clearance = (
+            float(profile.get("brim_width", "0") or 0)
+            + float(profile.get("brim_object_gap", "0") or 0)
+            + 0.2
+            if brim_type != "no_brim" and obj.brim_override != "no_brim" else 0.0
+        )
+    elif obj.brim_override == "no_brim":
+        brim_clearance = 0.0
+    hull = _convex_hull_xy(obj.mesh.vertices)
+    if not hull:
+        raise MosaicError(f"Cannot verify bed clearance for '{obj.name}': mesh is empty.")
     bed_min_x, bed_min_y, bed_max_x, bed_max_y = _profile_bounds(profile, "printable_area")
     polygon = _profile_points(profile.get("printable_area", []))
-    clearance = min(
-        _distance_to_polygon_edges(float(x), float(y), polygon)
-        for x, y in obj.mesh.vertices[:, :2]
+    xs, ys = zip(*hull)
+    bounds = (min(xs), min(ys), max(xs), max(ys))
+    clearance = min(_distance_to_polygon_edges(x, y, polygon) for x, y in hull)
+    dimensions_fit = bounds[2] - bounds[0] <= bed_max_x - bed_min_x - 2 * (edge_margin + brim_clearance) + 1e-7
+    dimensions_fit &= bounds[3] - bounds[1] <= bed_max_y - bed_min_y - 2 * (edge_margin + brim_clearance) + 1e-7
+    boundary_fit = clearance + 1e-7 >= edge_margin + brim_clearance
+    polygon_fit = all(_point_in_polygon(x, y, polygon) for x, y in hull)
+    exclusion = _profile_points(profile.get("bed_exclude_area", []))
+    exclusion_bounds = _profile_bounds(profile, "bed_exclude_area")
+    exclusion_clearance = _hull_rect_distance(hull, exclusion_bounds) if exclusion else math.inf
+    exclusion_fit = exclusion_clearance + 1e-7 >= brim_clearance + 0.02
+    in_bounds = (
+        bounds[0] >= bed_min_x + edge_margin + brim_clearance - 1e-7
+        and bounds[1] >= bed_min_y + edge_margin + brim_clearance - 1e-7
+        and bounds[2] <= bed_max_x - edge_margin - brim_clearance + 1e-7
+        and bounds[3] <= bed_max_y - edge_margin - brim_clearance + 1e-7
     )
-    width, height = float(hi[0] - lo[0]), float(hi[1] - lo[1])
-    dimensions_fit = width <= bed_max_x - bed_min_x - 2 * edge_margin + 1e-7
-    dimensions_fit &= height <= bed_max_y - bed_min_y - 2 * edge_margin + 1e-7
-    boundary_fit = clearance + 1e-7 >= edge_margin
-    corners = ((lo[0], lo[1]), (lo[0], hi[1]), (hi[0], lo[1]), (hi[0], hi[1]))
-    polygon_fit = all(_point_in_polygon(float(x), float(y), polygon) for x, y in corners)
-
-    excl_min_x, excl_min_y, excl_max_x, excl_max_y = _profile_bounds(profile, "bed_exclude_area")
-    intersects_exclusion = False
-    for index, center in enumerate(centers):
-        stud_vertices = obj.mesh.vertices[index * vertices_per_stud:(index + 1) * vertices_per_stud]
-        stud_lo, stud_hi = stud_vertices[:, :2].min(axis=0), stud_vertices[:, :2].max(axis=0)
-        if (stud_lo[0] <= excl_max_x + safety_margin and stud_hi[0] >= excl_min_x - safety_margin
-                and stud_lo[1] <= excl_max_y + safety_margin and stud_hi[1] >= excl_min_y - safety_margin):
-            intersects_exclusion = True
-            break
-
     reasons = []
     if not dimensions_fit:
-        reasons.append(f"object size {width:.2f}×{height:.2f} mm exceeds bed size minus two margins")
-    if not boundary_fit or not polygon_fit:
+        reasons.append("object hull plus brim exceeds printable dimensions")
+    if not boundary_fit or not polygon_fit or not in_bounds:
         reasons.append(f"smallest edge clearance is {clearance:.2f} mm")
-    if intersects_exclusion:
+    if not exclusion_fit:
         reasons.append("object intersects the printer exclusion area")
-    return not reasons, clearance, "; ".join(reasons) if reasons else None
+    center = ((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2)
+    bed_center = ((bed_min_x + bed_max_x) / 2, (bed_min_y + bed_max_y) / 2)
+    report = {
+        "position_mm": (round(center[0], 3), round(center[1], 3)),
+        "center_shift_mm": (round(center[0] - bed_center[0], 3), round(center[1] - bed_center[1], 3)),
+        "edge_clearance_mm": round(clearance, 3),
+        "exclusion_clearance_mm": round(max(0.0, exclusion_clearance - brim_clearance), 3),
+        "brim_clearance_mm": round(brim_clearance, 3),
+    }
+    return not reasons, report, "; ".join(reasons) if reasons else None
 
 
 def _fit_message(plate_name: str, reasons: str, edge_margin: float) -> str:
@@ -1043,10 +1310,24 @@ def _validate_bambu_3mf(path: Path, profile: dict, edge_margin: float = EDGE_MAR
         plates = model_settings.findall("plate")
         if len(plates) != len(wrapper_to_mesh):
             raise MosaicError("Each Bambu plate must contain exactly one model object.")
-        printable_min_x, printable_min_y, printable_max_x, printable_max_y = _profile_bounds(profile, "printable_area")
+        project_cfg = json.loads(archive.read("Metadata/project_settings.config"))
+        base_brim = (
+            float(project_cfg.get("brim_width", "0") or 0)
+            + float(project_cfg.get("brim_object_gap", "0") or 0)
+            + 0.2
+            if str(project_cfg.get("brim_type", "no_brim")) != "no_brim" else 0.0
+        )
+        bed_min_x, bed_min_y, bed_max_x, bed_max_y = _profile_bounds(profile, "printable_area")
         printable_polygon = _profile_points(profile.get("printable_area", []))
-        exclude_min_x, exclude_min_y, exclude_max_x, exclude_max_y = _profile_bounds(profile, "bed_exclude_area")
-        for plate in plates:
+        exclusion = _profile_points(profile.get("bed_exclude_area", []))
+        exclusion_rect = _profile_bounds(profile, "bed_exclude_area")
+        build = root.find("c:build", ns)
+        build_items = {} if build is None else {
+            item.get("objectid", ""): item for item in build.findall("c:item", ns)
+        }
+        plate_columns = max(1, math.ceil(math.sqrt(len(plates))))
+        plate_stride = (bed_max_x - bed_min_x) * 1.2
+        for plate_index, plate in enumerate(plates):
             instances = plate.findall("model_instance")
             if len(instances) != 1:
                 raise MosaicError("Each Bambu plate must contain exactly one model instance.")
@@ -1057,6 +1338,9 @@ def _validate_bambu_3mf(path: Path, profile: dict, edge_margin: float = EDGE_MAR
             )
             if object_id not in wrapper_to_mesh or object_id not in settings_objects:
                 raise MosaicError(f"Plate references unknown wrapper object {object_id}.")
+            build_item = build_items.get(object_id)
+            if build_item is None:
+                raise MosaicError(f"Object {object_id} has no 3MF build placement.")
             obj_settings = settings_objects[object_id]
             extruder = next(
                 (meta.get("value", "") for meta in obj_settings.findall("metadata")
@@ -1068,39 +1352,41 @@ def _validate_bambu_3mf(path: Path, profile: dict, edge_margin: float = EDGE_MAR
             part = obj_settings.find("part")
             if part is None:
                 raise MosaicError(f"Object {object_id} has no part block.")
-            source_x = source_y = 0.0
-            for meta in part.findall("metadata"):
-                if meta.get("key") == "source_offset_x":
-                    source_x = float(meta.get("value", "0"))
-                elif meta.get("key") == "source_offset_y":
-                    source_y = float(meta.get("value", "0"))
+            build_transform = [float(value) for value in build_item.get("transform", "").split()]
+            if len(build_transform) != 12:
+                raise MosaicError(f"Object {object_id} has an invalid build transform.")
+            virtual_x = (plate_index % plate_columns) * plate_stride
+            virtual_y = -(plate_index // plate_columns) * plate_stride
+            local_x, local_y = build_transform[9] - virtual_x, build_transform[10] - virtual_y
+            brim_setting = next(
+                (meta.get("value", "") for meta in obj_settings.findall("metadata")
+                 if meta.get("key") == "brim_type"),
+                "",
+            )
+            brim = 0.0 if brim_setting == "no_brim" else base_brim
             object_path, inner_id = wrapper_to_mesh[object_id]
             inner_root = ET.fromstring(archive.read(object_path))
             inner = next(obj for obj in inner_root.findall("c:resources/c:object", ns) if obj.get("id") == inner_id)
-            world_points = []
+            local_points = []
             for vertex in inner.findall("c:mesh/c:vertices/c:vertex", ns):
-                x = float(vertex.get("x", "0")) + source_x
-                y = float(vertex.get("y", "0")) + source_y
-                world_points.append((x, y))
-                if (not printable_min_x <= x <= printable_max_x
-                        or not printable_min_y <= y <= printable_max_y
-                        or not _point_in_polygon(x, y, printable_polygon)):
-                    raise MosaicError(f"Object {object_id} extends outside the selected printable area.")
-                if _distance_to_polygon_edges(x, y, printable_polygon) + 1e-7 < edge_margin:
-                    raise MosaicError(
-                        f"Object {object_id} is less than {edge_margin:g} mm from a printable-area edge."
-                    )
-                if (exclude_min_x - 2.0 <= x <= exclude_max_x + 2.0
-                        and exclude_min_y - 2.0 <= y <= exclude_max_y + 2.0):
-                    raise MosaicError(f"Object {object_id} has a vertex in the printer exclusion area.")
-            if world_points:
-                width = max(x for x, _ in world_points) - min(x for x, _ in world_points)
-                height = max(y for _, y in world_points) - min(y for _, y in world_points)
-                if (width > printable_max_x - printable_min_x - 2 * edge_margin + 1e-7
-                        or height > printable_max_y - printable_min_y - 2 * edge_margin + 1e-7):
-                    raise MosaicError(f"Object {object_id} exceeds printable dimensions after applying the edge margin.")
+                local_points.append((float(vertex.get("x", "0")) + local_x,
+                                     float(vertex.get("y", "0")) + local_y))
+            hull = _convex_hull_xy(np.asarray(local_points, dtype=np.float64))
+            if not hull:
+                raise MosaicError(f"Object {object_id} has no mesh vertices.")
+            xs, ys = zip(*hull)
+            edge_clearance = min(_distance_to_polygon_edges(x, y, printable_polygon) for x, y in hull)
+            if (not all(_point_in_polygon(x, y, printable_polygon) for x, y in hull)
+                    or edge_clearance + 1e-7 < edge_margin + brim
+                    or min(xs) < bed_min_x + edge_margin + brim - 1e-7
+                    or min(ys) < bed_min_y + edge_margin + brim - 1e-7
+                    or max(xs) > bed_max_x - edge_margin - brim + 1e-7
+                    or max(ys) > bed_max_y - edge_margin - brim + 1e-7):
+                raise MosaicError(f"Object {object_id} or its brim extends outside the printable area.")
+            exclusion_gap = _hull_rect_distance(hull, exclusion_rect) if exclusion else math.inf
+            if exclusion_gap + 1e-7 < brim + 0.02:
+                raise MosaicError(f"Object {object_id} or its brim intersects the printer exclusion area.")
 
-        project_cfg = json.loads(archive.read("Metadata/project_settings.config"))
         slot_count = len(COLOR_PALETTE)
         colors = [color.hex for color in COLOR_PALETTE]
         if project_cfg.get("filament_colour") != colors:

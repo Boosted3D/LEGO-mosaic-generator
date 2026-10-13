@@ -170,7 +170,16 @@ if res:
     with st.expander("Print plate fit and edge clearance"):
         st.caption(f"Required edge margin: {edge_margin:g} mm · rotation: {rotation}°")
         for item in res.plate_edge_clearance:
-            st.write(f"{item['plate']}: {item['clearance_mm']:.2f} mm")
+            x, y = item["position_mm"]
+            dx, dy = item["center_shift_mm"]
+            brim_note = " · brim disabled for this plate" if item.get("brim_disabled") else ""
+            st.write(
+                f"{item['plate']}: position ({x:.2f}, {y:.2f}) mm · "
+                f"shift ({dx:+.2f}, {dy:+.2f}) mm from bed center · "
+                f"edge {item['edge_clearance_mm']:.2f} mm · "
+                f"exclusion gap {item['exclusion_clearance_mm']:.2f} mm"
+                f"{brim_note}"
+            )
     preview_col, bom_col = st.columns([1.25, 1], gap="large")
     with preview_col:
         with st.container(border=True):
