@@ -27,8 +27,14 @@ st.set_page_config(page_title="LEGO Mosaic → Bambu Lab 3D Print", layout="wide
 
 # CSS
 color_swatch_rules = "\n".join(
-    f'.st-key-use_color_{color.code} [data-testid="stCheckbox"] label::before '
-    f'{{ background-color: {color.hex}; }}'
+    f'''
+    :is([data-testid="column"], [data-testid="stColumn"]):has(.st-key-use_color_{color.code}) {{ position: relative; min-height: 32px; }}
+    :is([data-testid="column"], [data-testid="stColumn"]):has(.st-key-use_color_{color.code}) [data-testid="stMarkdownContainer"] {{ position: absolute; top: 2px; left: 0; z-index: 0; }}
+    :is([data-testid="column"], [data-testid="stColumn"]):has(.st-key-use_color_{color.code}) .st-key-use_color_{color.code} {{ position: absolute; inset: 0; z-index: 1; width: 32px; height: 32px; opacity: 0 !important; }}
+    :is([data-testid="column"], [data-testid="stColumn"]):has(.st-key-use_color_{color.code}):has(input:checked) .palette-swatch {{ opacity: 1; outline: 1px solid var(--accent); outline-offset: 2px; }}
+    :is([data-testid="column"], [data-testid="stColumn"]):has(.st-key-use_color_{color.code}):has(input:focus-visible) .palette-swatch {{ outline: 2px solid var(--accent); outline-offset: 3px; }}
+    :is([data-testid="column"], [data-testid="stColumn"]):has(.st-key-use_color_{color.code}):hover::after {{ content: "{color.name_en} ({color.code})"; position: absolute; top: 36px; left: 0; z-index: 20; padding: 5px 7px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface-raised); color: var(--text); font-size: 11px; white-space: nowrap; pointer-events: none; }}
+    '''
     for color in L.COLOR_PALETTE
 )
 styles = """
@@ -92,22 +98,9 @@ div[data-baseweb="select"] > div, [data-testid="stNumberInput"] input {
 [data-testid="stSidebar"] [data-testid="stExpander"] details > div { padding: 0 0 16px; }
 [data-testid="stSidebar"] [data-testid="stRadio"] label,
 [data-testid="stSidebar"] [data-testid="stCheckbox"] label { font-size: .85rem; }
-div[class*="st-key-use_color_"] { width: 32px; min-width: 32px; }
-div[class*="st-key-use_color_"] [data-testid="stCheckbox"] { min-height: 32px; }
-div[class*="st-key-use_color_"] [data-testid="stCheckbox"] label {
-  position: relative; display: block; width: 28px; height: 28px; min-height: 28px;
-  padding: 0; margin: 0; font-size: 0; color: transparent; cursor: pointer;
-}
-div[class*="st-key-use_color_"] [data-testid="stCheckbox"] label::before {
-  content: ""; position: absolute; inset: 2px; background: #555;
-  border: 1px solid #ffffff24; border-radius: 2px; opacity: .38;
-}
-div[class*="st-key-use_color_"] [data-testid="stCheckbox"] label:has(input:checked)::before {
-  opacity: 1; outline: 1px solid var(--accent); outline-offset: 2px;
-}
-div[class*="st-key-use_color_"] [data-testid="stCheckbox"] input {
-  position: absolute; inset: 0; z-index: 2; width: 28px; height: 28px;
-  margin: 0; opacity: 0; cursor: pointer;
+.palette-swatch {
+  display: block; width: 28px; height: 28px; box-sizing: border-box;
+  border: 1px solid #ffffff35; border-radius: 2px; opacity: .4;
 }
 [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button {
   min-height: 28px; padding: 0 4px; border: 0; background: transparent;
@@ -128,9 +121,8 @@ div[class*="st-key-use_color_"] [data-testid="stCheckbox"] input {
 .parts-table tfoot td { border-top: 1px solid #3a3d42; border-bottom: 0; font-weight: 600; }
 .swatch-dot { display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -2px; border: 1px solid #ffffff30; border-radius: 2px; }
 @media (max-width: 700px) { .block-container { padding: 24px 16px 32px; } }
-/*COLOR_RULES*/
 </style>
-""".replace("/*COLOR_RULES*/", color_swatch_rules)
+""".replace("</style>", f"{color_swatch_rules}</style>")
 st.markdown(styles, unsafe_allow_html=True)
 
 
@@ -150,11 +142,17 @@ with st.sidebar:
             selected_codes = []
             for index, color in enumerate(L.COLOR_PALETTE):
                 with swatch_columns[index % 6]:
+                    tooltip = html.escape(f"{color.name_en} ({color.code})", quote=True)
+                    st.markdown(
+                        f'<span class="palette-swatch" title="{tooltip}" '
+                        f'style="background-color: {color.hex} !important"></span>',
+                        unsafe_allow_html=True,
+                    )
                     checked = st.checkbox(
-                        color.name_en,
+                        f"{color.name_en} ({color.code})",
                         value=True,
                         key=f"use_color_{color.code}",
-                        help=color.name_en,
+                        help=f"{color.name_en} ({color.code})",
                     )
                     if checked:
                         selected_codes.append(color.code)
