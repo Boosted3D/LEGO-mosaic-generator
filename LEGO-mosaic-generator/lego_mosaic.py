@@ -376,13 +376,13 @@ def write_bambu_multi_plate_3mf(
             )
             mesh_xml.append("</vertices><triangles>")
             mesh_xml.extend(
-                f'<triangle v1="{a}" v2="{b}" v3="{c}"/>'
+                f'<triangle v1="{a}" v2="{b}" v3="{c}" pid="1" p1="{material_index}"/>'
                 for a, b, c in faces
             )
             mesh_xml.append("</triangles></mesh>")
             objects_xml.append(
                 f'<object id="{object_id}" name="{escape(print_object.name)}" '
-                f'type="model" pid="1" pindex="{material_index}" p:UUID="{obj_uuid}">'
+                f'type="model" p:UUID="{obj_uuid}">'
                 f'{"".join(mesh_xml)}</object>'
             )
             builds_xml.append(
@@ -599,82 +599,6 @@ def loose_positions(count: int, stud_w: float, o: Options) -> list[np.ndarray]:
     return beds
 
 
-def build_color_grouped_plates(
-    idx: np.ndarray,
-    stud: Mesh,
-    o: Options,
-    palette: tuple[LegoColor, ...],
-    *,
-    max_studs_per_plate: int = 16 * 16,
-) -> list[tuple[str, list[PrintObject]]]:
-    """Group studs into compact color panels and pack panels onto print beds."""
-    if max_studs_per_plate <= 0:
-        raise MosaicError("Maximum studs per color plate must be positive.")
-    bed_usable = o.bed - 2 * o.bed_margin
-    max_grid_side = int(bed_usable // o.pitch)
-    if max_grid_side < 1:
-        raise MosaicError("Print bed is too small for one stud.")
-    max_studs_per_plate = min(max_studs_per_plate, max_grid_side * max_grid_side)
-
-    spacing = max(2.0, o.pitch * 0.5)
-    bed_objects: list[list[PrintObject]] = [[]]
-    x_cursor = o.bed_margin
-    y_cursor = o.bed_margin
-    row_height = 0.0
-
-    for color_index, color in enumerate(palette):
-        stud_count = int(np.count_nonzero(idx == color_index))
-        if not stud_count:
-            continue
-
-        plate_count = math.ceil(stud_count / max_studs_per_plate)
-        base_count, remainder = divmod(stud_count, plate_count)
-        color_plate_number = 0
-
-        for plate_index in range(plate_count):
-            count = base_count + (1 if plate_index < remainder else 0)
-            columns = min(max_grid_side, math.ceil(math.sqrt(count)))
-            rows = math.ceil(count / columns)
-            if rows > max_grid_side:
-                raise MosaicError("A color group cannot fit within the configured print bed.")
-
-            grid_width = columns * o.pitch
-            grid_height = rows * o.pitch
-            if x_cursor + grid_width > o.bed - o.bed_margin:
-                x_cursor = o.bed_margin
-                y_cursor += row_height + spacing
-                row_height = 0.0
-            if y_cursor + grid_height > o.bed - o.bed_margin:
-                if not bed_objects[-1]:
-                    raise MosaicError("A color panel cannot fit within the configured print bed.")
-                bed_objects.append([])
-                x_cursor = o.bed_margin
-                y_cursor = o.bed_margin
-                row_height = 0.0
-
-            positions = np.column_stack((
-                x_cursor + (np.arange(count) % columns) * o.pitch + o.pitch / 2,
-                y_cursor + (np.arange(count) // columns) * o.pitch + o.pitch / 2,
-                np.zeros(count, dtype=float),
-            ))
-            color_plate_number += 1
-            obj = PrintObject(
-                f"Studs {color.name_en} - Plate {color_plate_number} of {plate_count}",
-                tile_mesh(stud, positions),
-                color.rgb,
-                filament_slot(color.code),
-            )
-            bed_objects[-1].append(obj)
-            x_cursor += grid_width + spacing
-            row_height = max(row_height, grid_height)
-
-    return [
-        (f"Color print plate {index + 1}", objects)
-        for index, objects in enumerate(bed_objects)
-        if objects
-    ]
-
-
 # --------------------------------------------------------------------------- #
 # Instructions, Preview & BOM
 # --------------------------------------------------------------------------- #
@@ -882,8 +806,7 @@ def generate(image_source, out_dir: str | Path = "output",
             tile_objs = build_mosaic_tile_objects(sub, stud, o, origin, origin, 0.0, palette)
             for tobj in tile_objs:
                 tobj.name = f"{tile_names[tile_number - 1]} - {tobj.name}"
-            if o.palette_mode == "grayscale":
-                project_plates.append((f"Mosaic - {tile_names[tile_number - 1]}", tile_objs))
+            project_plates.append((f"Mosaic - {tile_names[tile_number - 1]}", tile_objs))
             if o.palette_mode == "grayscale":
                 p3mf = out / f"mosaic_plate_{o.grid}x{o.grid}_tile_{tile_number}.3mf"
                 pstl = out / f"mosaic_plate_{o.grid}x{o.grid}_tile_{tile_number}.stl"
@@ -897,8 +820,7 @@ def generate(image_source, out_dir: str | Path = "output",
         size = o.grid * o.pitch
         origin = (o.bed - size) / 2
         tile_objs = build_mosaic_tile_objects(idx, stud, o, origin, origin, 0.0, palette)
-        if o.palette_mode == "grayscale":
-            project_plates.append((f"Mosaic {o.grid}x{o.grid}", tile_objs))
+        project_plates.append((f"Mosaic {o.grid}x{o.grid}", tile_objs))
         if o.palette_mode == "grayscale":
             p3mf, pstl = out / f"mosaic_plate_{o.grid}x{o.grid}.3mf", out / f"mosaic_plate_{o.grid}x{o.grid}.stl"
             write_3mf(p3mf, tile_objs, f"LEGO mosaic {o.grid}x{o.grid}")
@@ -940,9 +862,8 @@ def generate(image_source, out_dir: str | Path = "output",
     res.files["spare_3mf"] = mc_files
     res.files["spare_stl"] = stl_files
 
-    # Export studs grouped by color. In color mode, each bed-sized group is a
-    # separate named plate in the Bambu project; large color counts are split
-    # across as many plates as the printer bed can hold.
+    # Export color counts as separate auxiliary files. The Bambu project above
+    # keeps the complete mosaic layout and groups studs by color in-place.
     color_plate_files: list[Path] = []
     for i, (c, row) in enumerate(zip(palette, res.bom)):
         needed = row["needed"]
@@ -956,9 +877,6 @@ def generate(image_source, out_dir: str | Path = "output",
             write_stl(obj.mesh, pstl)
             color_plate_files.extend([p3mf, pstl])
     res.files["color_plates"] = color_plate_files
-
-    if o.palette_mode == "color":
-        project_plates = build_color_grouped_plates(idx, stud, o, palette)
 
     project_path = out / "lego_mosaic_bambu_project.3mf"
     write_bambu_multi_plate_3mf(
