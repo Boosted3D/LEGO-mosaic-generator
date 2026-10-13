@@ -41,8 +41,8 @@ with st.sidebar:
                 if checked:
                     selected_codes.append(color.code)
         selected_colors = tuple(selected_codes)
-    grid_size = st.selectbox("Format", [48, 30], index=0,
-                             format_func=lambda x: f"{x}×{x} studs" + (" (1 plate)" if x == 30 else " (4 separate tiles of 24×24)"))
+    grid_size = st.selectbox("Format", [24, 30, 48, 60], index=2,
+                             format_func=lambda x: f"{x}×{x} studs" + (f" (4 tiles of {x // 2}×{x // 2})" if x in (48, 60) else " (1 plate)"))
     reserve = st.number_input("Reserve (%)", 0.0, 100.0, 5.0, 1.0)
     if palette_mode == "grayscale":
         thickness = st.number_input("Baseplate thickness (mm)", 0.4, 10.0, 1.6, 0.2)

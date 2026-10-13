@@ -77,7 +77,7 @@ def palette_for_mode(mode: str, selected_colors: tuple[str, ...] | None = None) 
 
 @dataclass
 class Options:
-    grid: int = 48                     # 30 or 48
+    grid: int = 48                     # 24, 30, 48, or 60
     palette_mode: str = "color"        # "color" or "grayscale"
     selected_colors: tuple[str, ...] | None = None  # None means all colors
     pitch: float = PITCH_MM
@@ -634,39 +634,30 @@ def generate(image_source, out_dir: str | Path = "output",
     res.warnings += warns
     stud_w = float(max(stud.bounds()[1][:2] - stud.bounds()[0][:2]))
 
-    if o.palette_mode == "grayscale" and o.grid == 48:
-        half = 24
+    if o.palette_mode == "grayscale" and o.grid in (48, 60):
+        half = o.grid // 2
         tile_size_mm = half * o.pitch
-        gap = 4.0
-        total_w = 2 * tile_size_mm + gap
-        origin_x = (o.bed - total_w) / 2
-        origin_y = (o.bed - total_w) / 2
-
-        coords = [
-            (0, 0, origin_x, origin_y + tile_size_mm + gap, "Top-left tile"),
-            (0, 1, origin_x + tile_size_mm + gap, origin_y + tile_size_mm + gap, "Top-right tile"),
-            (1, 0, origin_x, origin_y, "Bottom-left tile"),
-            (1, 1, origin_x + tile_size_mm + gap, origin_y, "Bottom-right tile")
-        ]
-
-        all_objs = []
-        for r_idx, c_idx, tx, ty, tname in coords:
+        origin = (o.bed - tile_size_mm) / 2
+        plate_files = []
+        tile_names = ("Top-left", "Top-right", "Bottom-left", "Bottom-right")
+        for tile_number, (r_idx, c_idx) in enumerate(((0, 0), (0, 1), (1, 0), (1, 1)), start=1):
             sub = idx[r_idx*half:(r_idx+1)*half, c_idx*half:(c_idx+1)*half]
-            tile_objs = build_mosaic_tile_objects(sub, stud, o, tx, ty, 0.0, palette)
+            tile_objs = build_mosaic_tile_objects(sub, stud, o, origin, origin, 0.0, palette)
             for tobj in tile_objs:
-                tobj.name = f"{tname} - {tobj.name}"
-                all_objs.append(tobj)
+                tobj.name = f"{tile_names[tile_number - 1]} - {tobj.name}"
+            p3mf = out / f"mosaic_plate_{o.grid}x{o.grid}_tile_{tile_number}.3mf"
+            pstl = out / f"mosaic_plate_{o.grid}x{o.grid}_tile_{tile_number}.stl"
+            write_3mf(p3mf, tile_objs, f"LEGO mosaic {o.grid}x{o.grid} tile {tile_number}")
+            write_stl(merge_meshes([ob.mesh for ob in tile_objs]), pstl)
+            plate_files.extend([p3mf, pstl])
 
-        p3mf, pstl = out / "mosaic_plate_48x48_4_tiles.3mf", out / "mosaic_plate_48x48.stl"
-        write_3mf(p3mf, all_objs, "LEGO mosaic 48x48 (4 tiles)")
-        write_stl(merge_meshes([ob.mesh for ob in all_objs]), pstl)
-        res.files["plate"] = [p3mf, pstl]
+        res.files["plate"] = plate_files
     elif o.palette_mode == "grayscale":
         size = o.grid * o.pitch
         origin = (o.bed - size) / 2
         tile_objs = build_mosaic_tile_objects(idx, stud, o, origin, origin, 0.0, palette)
-        p3mf, pstl = out / "mosaic_plate.3mf", out / "mosaic_plate.stl"
-        write_3mf(p3mf, tile_objs, "LEGO mosaic 30x30")
+        p3mf, pstl = out / f"mosaic_plate_{o.grid}x{o.grid}.3mf", out / f"mosaic_plate_{o.grid}x{o.grid}.stl"
+        write_3mf(p3mf, tile_objs, f"LEGO mosaic {o.grid}x{o.grid}")
         write_stl(merge_meshes([ob.mesh for ob in tile_objs]), pstl)
         res.files["plate"] = [p3mf, pstl]
 
@@ -729,7 +720,7 @@ def generate(image_source, out_dir: str | Path = "output",
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Image -> LEGO Mosaic + 3D print files.")
     ap.add_argument("image", help="JPG/PNG image")
-    ap.add_argument("--grid", type=int, default=48, choices=[30, 48])
+    ap.add_argument("--grid", type=int, default=48, choices=[24, 30, 48, 60])
     ap.add_argument("--mode", choices=["color", "grayscale"], default="color",
                     help="palette mode (default: color)")
     ap.add_argument("--out", default="output", help="output directory")
