@@ -38,6 +38,8 @@ html, body, [class*="css"] { font-family: Inter, ui-sans-serif, system-ui, sans-
 [data-testid="stSidebar"] { background: #111318; border-right: 1px solid var(--line); }
 [data-testid="stBaseButton-primary"] { background: var(--green); border: 1px solid var(--green); border-radius: 10px; color: white; transition: transform .15s ease, filter .15s ease; }
 [data-testid="stBaseButton-primary"]:hover { background: #07983e; border-color: #07983e; transform: translateY(-1px); }
+[data-testid="stSidebar"] [data-testid="stSlider"] [role="slider"] { background: var(--green); border-color: var(--green); }
+[data-testid="stSidebar"] [data-testid="stSlider"] [data-baseweb="slider"] > div > div { background: var(--green); }
 [data-testid="stDownloadButton"] button { border-radius: 10px; }
 [data-testid="stFileUploader"] section { border: 1px dashed #2d313a; border-radius: 0 0 16px 16px; background: #111318; min-height: 100px; transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
 [data-testid="stFileUploader"] section:hover, [data-testid="stFileUploader"] section:focus-within { border-color: #00ae42; box-shadow: 0 0 0 3px #00ae421a; background: #121914; }
@@ -158,6 +160,11 @@ with st.sidebar:
     reserve = st.number_input("Reserve (%)", 0.0, 100.0, 5.0, 1.0)
     st.markdown('<hr class="sidebar-rule"><div class="sidebar-section-title">03 &nbsp; PRINT INSTELLINGEN</div>', unsafe_allow_html=True)
     auto = st.checkbox("Auto-enhance contrast", value=True)
+    st.markdown("**Image adjustments**")
+    brightness = st.slider("Brightness", 0.5, 2.0, 1.0, 0.05,
+                           help="Adjust image brightness before converting it to studs.")
+    contrast = st.slider("Contrast", 0.5, 2.0, 1.0, 0.05,
+                         help="Adjust image contrast before converting it to studs.")
     loose_all = st.checkbox("Include loose studs (needed + reserve)", value=True)
     st.caption(f"Minimum space between studs: {L.MIN_STUD_GAP_MM:.1f} mm")
     edge_margin = st.number_input("Edge margin (mm)", min_value=0.0, max_value=50.0,
@@ -229,11 +236,9 @@ if upload is not None:
     processed_image_bytes = cropped_buffer.getvalue()
 
     with st.expander("Image adjustments", expanded=False):
-        adjust_cols = st.columns(4)
-        brightness = adjust_cols[0].slider("Brightness", 0.5, 1.5, 1.0, 0.05)
-        contrast = adjust_cols[1].slider("Contrast", 0.5, 1.8, 1.0, 0.05)
-        saturation = adjust_cols[2].slider("Color intensity", 0.0, 1.8, 1.0, 0.05)
-        sharpness = adjust_cols[3].slider("Sharpness", 0.0, 2.0, 1.0, 0.05)
+        adjust_cols = st.columns(2)
+        saturation = adjust_cols[0].slider("Color intensity", 0.0, 1.8, 1.0, 0.05)
+        sharpness = adjust_cols[1].slider("Sharpness", 0.0, 2.0, 1.0, 0.05)
 
     preview_palette = L.palette_for_mode(palette_mode, selected_colors)
     opts = L.Options(
