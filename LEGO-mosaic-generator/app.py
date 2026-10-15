@@ -42,12 +42,8 @@ html, body, [class*="css"] { font-family: Inter, ui-sans-serif, system-ui, sans-
 .upload-copy span { display:block; color:#9299a6; font-size:.82rem; margin-top:5px; }
 .sidebar-section-title { color:#838c98; font-size:.68rem; font-weight:700; letter-spacing:.11em; margin:18px 0 8px; }
 .sidebar-rule { border:0; border-top:1px solid #2d313a; margin:14px 0; }
-[class*="st-key-use_color_"] [data-testid="stToggle"] { position:relative; display:flex; align-items:center; gap:7px; box-sizing:border-box; width:100%; min-height:42px; padding:6px 8px; border:1px solid #343a44; border-radius:6px; background:#15181f; transition:border-color .3s ease,background .3s ease; }
-[class*="st-key-use_color_"] [data-testid="stToggle"]:has(input:checked) { border-color:#0d9488; background:#10201f; }
-[class*="st-key-use_color_"] [data-testid="stToggle"]::before { content:""; display:block; flex:0 0 14px; width:14px; height:14px; border:1px solid #ffffff66; border-radius:50%; background-color:#777; }
-[class*="st-key-use_color_"] [data-testid="stToggle"] label { flex:1; min-width:0; margin:0; }
-[class*="st-key-use_color_"] [data-testid="stToggle"] [role="switch"] { background-color:#3f444d !important; transition:background-color .3s ease; }
-[class*="st-key-use_color_"] [data-testid="stToggle"]:has(input:checked) [role="switch"] { background-color:#0d9488 !important; }
+.palette-swatch { display:flex; align-items:center; justify-content:center; min-height:38px; }
+.palette-swatch span { display:block; width:22px; height:22px; border:1px solid #ffffff66; border-radius:50%; }
 .empty-preview { min-height:300px; border:1px solid #2d313a; border-radius:18px; background:radial-gradient(ellipse at 50% 35%,#171b22 0%,#111318 70%); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px; text-align:center; }
 .placeholder-grid { display:grid; grid-template-columns:repeat(10,16px); gap:4px; margin-bottom:24px; opacity:.44; }
 .placeholder-grid span { width:16px; height:16px; border-radius:4px; background:#252b34; border:1px solid #343b46; }
@@ -98,22 +94,25 @@ with st.sidebar:
     palette_mode = "color" if mode_label == "Kleur" else "grayscale"
     selected_colors = None
     if palette_mode == "color":
-        st.markdown("**Colors to use**")
+        st.markdown("**Color swatches**")
         select_all_col, clear_all_col = st.columns(2)
         select_all_col.button("Select all", use_container_width=True, on_click=set_color_selection, args=(True,))
         clear_all_col.button("Clear all", use_container_width=True, on_click=set_color_selection, args=(False,))
-        color_swatches_css = "".join(
-            f'.st-key-use_color_{color.code} [data-testid="stToggle"]::before '
-            f'{{background-color:{color.hex} !important;}}'
-            for color in L.COLOR_PALETTE
-        )
-        st.markdown(f"<style>{color_swatches_css}</style>", unsafe_allow_html=True)
         color_columns = st.columns(2, gap="small")
         selected_codes = []
         for index, color in enumerate(L.COLOR_PALETTE):
             with color_columns[index % 2]:
                 color_key = f"use_color_{color.code}"
-                checked = st.toggle(color.name_en, value=True, key=color_key)
+                swatch_col, toggle_col = st.columns([1, 1], gap="small")
+                swatch_col.markdown(
+                    f'<div class="palette-swatch"><span title="{html.escape(color.name_en)} · {color.code}" '
+                    f'style="background-color:{color.hex} !important"></span></div>',
+                    unsafe_allow_html=True,
+                )
+                checked = toggle_col.toggle(
+                    color.name_en, value=True, key=color_key,
+                    label_visibility="collapsed",
+                )
                 if checked:
                     selected_codes.append(color.code)
         selected_colors = tuple(selected_codes)
