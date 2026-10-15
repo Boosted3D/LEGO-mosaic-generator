@@ -96,9 +96,9 @@ st.markdown("""
 
 with st.sidebar:
     st.header("Settings")
-    st.markdown('<div class="sidebar-section-title">01 &nbsp; KLEURENPALET</div>', unsafe_allow_html=True)
-    mode_label = st.radio("Palette", ["Kleur", "Grijstinten"], horizontal=True)
-    palette_mode = "color" if mode_label == "Kleur" else "grayscale"
+    st.markdown('<div class="sidebar-section-title">01 &nbsp; COLOR PALETTE</div>', unsafe_allow_html=True)
+    mode_label = st.radio("Palette", ["Color", "Grayscale"], horizontal=True)
+    palette_mode = "color" if mode_label == "Color" else "grayscale"
     selected_colors = None
     if palette_mode == "color":
         st.markdown("**Color swatches**")
@@ -154,11 +154,11 @@ with st.sidebar:
                 if checked:
                     selected_codes.append(color.code)
         selected_colors = tuple(selected_codes)
-    st.markdown('<hr class="sidebar-rule"><div class="sidebar-section-title">02 &nbsp; FORMAAT &amp; AFMETINGEN</div>', unsafe_allow_html=True)
+    st.markdown('<hr class="sidebar-rule"><div class="sidebar-section-title">02 &nbsp; FORMAT &amp; SIZE</div>', unsafe_allow_html=True)
     grid_size = st.selectbox("Format", [24, 30, 48, 60], index=2,
                              format_func=lambda x: f"{x}×{x} studs" + (f" (4 tiles of {x // 2}×{x // 2})" if x in (48, 60) else " (1 plate)"))
     reserve = st.number_input("Reserve (%)", 0.0, 100.0, 5.0, 1.0)
-    st.markdown('<hr class="sidebar-rule"><div class="sidebar-section-title">03 &nbsp; PRINT INSTELLINGEN</div>', unsafe_allow_html=True)
+    st.markdown('<hr class="sidebar-rule"><div class="sidebar-section-title">03 &nbsp; PRINT SETTINGS</div>', unsafe_allow_html=True)
     auto = st.checkbox("Auto-enhance contrast", value=True)
     st.markdown("**Image adjustments**")
     brightness = st.slider("Brightness", 0.5, 2.0, 1.0, 0.05,
@@ -179,8 +179,8 @@ st.markdown('''
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>
   </svg>
-  <strong>Sleep je afbeelding hiernaartoe of klik om te uploaden</strong>
-  <span>Ondersteunt JPG en PNG · max. 200 MB</span>
+  <strong>Drag your image here or click to upload</strong>
+  <span>Supports JPG and PNG · max. 200 MB</span>
 </div>
 ''', unsafe_allow_html=True)
 upload = st.file_uploader("Image (JPG/PNG)", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
@@ -380,7 +380,7 @@ else:
         '<section class="empty-preview">'
         f'<div class="placeholder-grid">{placeholder_cells}</div>'
         '<strong>Your mosaic preview will appear here</strong>'
-        '<p>Upload een afbeelding om direct de 2D LEGO-preview en het 3D-bestandsoverzicht te bekijken.</p>'
+        '<p>Upload an image to preview the 2D LEGO mosaic and parts overview.</p>'
         '</section>',
         unsafe_allow_html=True,
     )
