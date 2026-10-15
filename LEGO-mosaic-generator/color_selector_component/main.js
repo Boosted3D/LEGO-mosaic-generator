@@ -1,7 +1,9 @@
 (() => {
-  const swatches = document.getElementById("swatches");
+  const container = document.getElementById("swatches");
   const status = document.getElementById("status");
-  let lastArgs = null;
+  const buttons = new Map();
+  let colors = [];
+  let selectedCodes = new Set();
 
   const post = (type, extra = {}) => window.parent.postMessage({
     isStreamlitMessage: true,
@@ -9,84 +11,71 @@
     ...extra,
   }, "*");
 
-  function sendValue(selectedCodes) {
-    post("streamlit:setComponentValue", {
-      value: selectedCodes,
-      dataType: "json",
-    });
+  function orderedSelection() {
+    return colors.filter((color) => selectedCodes.has(color.code)).map((color) => color.code);
+  }
+
+  function syncButton(button, color) {
+    const selected = selectedCodes.has(color.code);
+    button.dataset.code = color.code;
+    button.style.setProperty("background-color", selected ? color.hex : "#0e1117", "important");
+    button.title = `Bambu Lab: ${color.name} (${color.code} · ${color.hex})`;
+    button.setAttribute("aria-label", `${color.name}, ${color.code}, ${color.hex}`);
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
   }
 
   function copyHex(hex) {
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(hex).catch(() => {});
-      }
-    } catch (_) {
-      // Clipboard access may be blocked in embedded browsers; selection still works.
-    }
+    if (!navigator.clipboard?.writeText) return;
+    navigator.clipboard.writeText(hex).catch(() => {
+      // Clipboard permission is optional; it must never block selection.
+    });
   }
 
-  function fallbackCopy(hex) {
-    const field = document.createElement("textarea");
-    field.value = hex;
-    field.style.position = "fixed";
-    field.style.opacity = "0";
-    document.body.appendChild(field);
-    field.select();
-    document.execCommand("copy");
-    field.remove();
+  function toggleColor(code) {
+    const color = colors.find((item) => item.code === code);
+    if (!color) return;
+
+    if (selectedCodes.has(code)) selectedCodes.delete(code);
+    else selectedCodes.add(code);
+
+    for (const item of colors) syncButton(buttons.get(item.code), item);
+    const value = orderedSelection();
+    status.textContent = `${color.name} ${selectedCodes.has(code) ? "selected" : "removed"}; ${color.hex} copied`;
+    copyHex(color.hex);
+    post("streamlit:setComponentValue", { value, dataType: "json" });
   }
 
   function render(args) {
-    lastArgs = args;
-    const selected = new Set(args.selected_codes || []);
-    swatches.replaceChildren();
+    colors = Array.isArray(args.colors) ? args.colors : [];
+    selectedCodes = new Set(Array.isArray(args.selected_codes) ? args.selected_codes : []);
+    const currentCodes = new Set(colors.map((color) => color.code));
 
-    (args.colors || []).forEach((color) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "swatch";
-      const isSelected = selected.has(color.code);
-      button.style.setProperty("background-color", isSelected ? color.hex : "#0e1117", "important");
-      button.title = `Bambu Lab: ${color.name} (${color.code} · ${color.hex})`;
-      button.setAttribute("aria-label", `${color.name}, ${color.code}, ${color.hex}`);
-      button.setAttribute("aria-pressed", isSelected ? "true" : "false");
-      button.addEventListener("click", () => {
-        const next = new Set(lastArgs.selected_codes || []);
-        if (next.has(color.code)) next.delete(color.code);
-        else next.add(color.code);
-        const ordered = (lastArgs.colors || [])
-          .map((entry) => entry.code)
-          .filter((code) => next.has(code));
-        // Update locally at click time so the swatch responds immediately,
-        // without waiting for Streamlit's round-trip and rerender.
-        lastArgs.selected_codes = ordered;
-        for (const swatch of swatches.children) {
-          const entry = lastArgs.colors.find((item) => item.code === swatch.dataset.code);
-          const selectedNow = next.has(swatch.dataset.code);
-          swatch.setAttribute("aria-pressed", selectedNow ? "true" : "false");
-          swatch.style.setProperty(
-            "background-color",
-            selectedNow ? entry.hex : "#0e1117",
-            "important",
-          );
-        }
-        copyHex(color.hex);
-        status.textContent = `${color.name} ${next.has(color.code) ? "selected" : "removed"}; ${color.hex} copied`;
-        sendValue(ordered);
-      });
-      button.dataset.code = color.code;
-      swatches.appendChild(button);
-    });
-    post("streamlit:setFrameHeight", { height: 40 });
+    for (const [code, button] of buttons) {
+      if (!currentCodes.has(code)) {
+        button.remove();
+        buttons.delete(code);
+      }
+    }
+
+    for (const color of colors) {
+      let button = buttons.get(color.code);
+      if (!button) {
+        button = document.createElement("button");
+        button.type = "button";
+        button.className = "swatch";
+        button.addEventListener("click", () => toggleColor(button.dataset.code));
+        buttons.set(color.code, button);
+        container.appendChild(button);
+      }
+      syncButton(button, color);
+    }
+    post("streamlit:setFrameHeight", { height: 44 });
   }
 
   window.addEventListener("message", (event) => {
-    if (event.data && event.data.type === "streamlit:render") {
-      render(event.data.args || {});
-    }
+    if (event.data?.type === "streamlit:render") render(event.data.args || {});
   });
 
   post("streamlit:componentReady", { apiVersion: 1 });
-  post("streamlit:setFrameHeight", { height: 40 });
+  post("streamlit:setFrameHeight", { height: 44 });
 })();
