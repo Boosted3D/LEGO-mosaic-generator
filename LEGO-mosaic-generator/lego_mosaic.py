@@ -19,7 +19,7 @@ from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 # --------------------------------------------------------------------------- #
 # Constants & Palette
@@ -102,6 +102,13 @@ class Options:
     bed_margin: float = EDGE_MARGIN_MM # free margin on print bed (mm)
     rotation_degrees: int = 0          # selected plate orientation, applied before fit checks
     scale_to_fit: bool = False         # explicit opt-in; never scale silently
+    crop_zoom: float = 1.0
+    crop_x: float = 0.5
+    crop_y: float = 0.5
+    brightness: float = 1.0
+    contrast: float = 1.0
+    saturation: float = 1.0
+    sharpness: float = 1.0
 
 
 # --------------------------------------------------------------------------- #
@@ -675,11 +682,24 @@ def load_image(source) -> Image.Image:
     return img
 
 
-def center_crop_resize(img: Image.Image, n: int) -> Image.Image:
+def center_crop_resize(
+    img: Image.Image,
+    n: int,
+    zoom: float = 1.0,
+    crop_x: float = 0.5,
+    crop_y: float = 0.5,
+) -> Image.Image:
+    return _crop_square(img, zoom, crop_x, crop_y).resize((n, n), Image.Resampling.LANCZOS)
+
+
+def _crop_square(
+    img: Image.Image, zoom: float = 1.0, crop_x: float = 0.5, crop_y: float = 0.5
+) -> Image.Image:
     w, h = img.size
-    s = min(w, h)
-    left, top = (w - s) // 2, (h - s) // 2
-    return img.crop((left, top, left + s, top + s)).resize((n, n), Image.Resampling.LANCZOS)
+    side = max(1, round(min(w, h) / max(1.0, min(3.0, float(zoom)))))
+    left = round((w - side) * max(0.0, min(1.0, float(crop_x))))
+    top = round((h - side) * max(0.0, min(1.0, float(crop_y))))
+    return img.crop((left, top, left + side, top + side))
 
 
 def srgb_to_lab(rgb) -> np.ndarray:
@@ -723,6 +743,33 @@ def quantize(img: Image.Image, dither: bool = False,
                 if x + 1 < w:
                     work[y + 1, x + 1] += err * 1 / 16
     return idx
+
+
+def mosaic_indices(
+    img: Image.Image,
+    grid: int,
+    palette: tuple[LegoColor, ...],
+    *,
+    autocontrast: bool = True,
+    brightness: float = 1.0,
+    contrast: float = 1.0,
+    saturation: float = 1.0,
+    sharpness: float = 1.0,
+    crop_zoom: float = 1.0,
+    crop_x: float = 0.5,
+    crop_y: float = 0.5,
+    dither: bool = False,
+) -> np.ndarray:
+    """Shared image-to-stud conversion used by both live preview and export."""
+    cropped = _crop_square(img, crop_zoom, crop_x, crop_y)
+    if autocontrast:
+        cropped = ImageOps.autocontrast(cropped, cutoff=1)
+    cropped = ImageEnhance.Brightness(cropped).enhance(max(0.1, brightness))
+    cropped = ImageEnhance.Contrast(cropped).enhance(max(0.1, contrast))
+    cropped = ImageEnhance.Color(cropped).enhance(max(0.0, saturation))
+    cropped = ImageEnhance.Sharpness(cropped).enhance(max(0.0, sharpness))
+    small = cropped.resize((grid, grid), Image.Resampling.LANCZOS)
+    return quantize(small, dither=dither, palette=palette)
 
 
 def count_studs(idx: np.ndarray, palette: tuple[LegoColor, ...] = PALETTE) -> list[int]:
@@ -1472,8 +1519,8 @@ def render_instructions(idx: np.ndarray, bom: list[dict], path: Path, cell: int 
     img.save(path)
 
 
-def render_preview(idx: np.ndarray, path: Path, cell: int = 20,
-                   palette: tuple[LegoColor, ...] = PALETTE) -> None:
+def render_preview_image(idx: np.ndarray, cell: int = 20,
+                         palette: tuple[LegoColor, ...] = PALETTE) -> Image.Image:
     n = idx.shape[0]
     img = Image.new("RGB", (n * cell, n * cell))
     d = ImageDraw.Draw(img)
@@ -1482,6 +1529,12 @@ def render_preview(idx: np.ndarray, path: Path, cell: int = 20,
             x, y = c * cell, r * cell
             d.rectangle([x, y, x + cell - 1, y + cell - 1], fill=palette[idx[r, c]].rgb)
             d.ellipse([x + 3, y + 3, x + cell - 4, y + cell - 4], outline=(0, 0, 0, 60), width=1)
+    return img
+
+
+def render_preview(idx: np.ndarray, path: Path, cell: int = 20,
+                   palette: tuple[LegoColor, ...] = PALETTE) -> None:
+    img = render_preview_image(idx, cell=cell, palette=palette)
     img.save(path)
 
 
@@ -1579,10 +1632,13 @@ def generate(image_source, out_dir: str | Path = "output",
     project_plates: list[tuple[str, list[PrintObject]]] = []
 
     img = load_image(image_source)
-    small = center_crop_resize(img, o.grid)
-    if o.autocontrast:
-        small = ImageOps.autocontrast(small, cutoff=1)
-    idx = quantize(small, o.dither, palette)
+    idx = mosaic_indices(
+        img, o.grid, palette, autocontrast=o.autocontrast,
+        brightness=o.brightness, contrast=o.contrast,
+        saturation=o.saturation, sharpness=o.sharpness,
+        crop_zoom=o.crop_zoom, crop_x=o.crop_x, crop_y=o.crop_y,
+        dither=o.dither,
+    )
     res.idx = idx
 
     counts = count_studs(idx, palette)

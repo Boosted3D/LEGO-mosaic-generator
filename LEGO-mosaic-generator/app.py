@@ -1,6 +1,7 @@
 """Streamlit interface for the LEGO mosaic generator."""
 import io
 import html
+import hashlib
 import tempfile
 from pathlib import Path
 
@@ -134,22 +135,66 @@ st.markdown('''
 </div>
 ''', unsafe_allow_html=True)
 upload = st.file_uploader("Image (JPG/PNG)", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+current_result_signature = "__no_image__"
 
 if upload is not None:
     try:
-        L.load_image(io.BytesIO(upload.getvalue()))
+        image_bytes = upload.getvalue()
+        source_image = L.load_image(io.BytesIO(image_bytes))
     except L.MosaicError as exc:
         st.error(str(exc))
         st.stop()
-    if st.button("Generate mosaic", type="primary"):
-        opts = L.Options(grid=grid_size, palette_mode=palette_mode,
-                         selected_colors=selected_colors, reserve_pct=reserve,
-                         dither=False, autocontrast=auto, loose_include_needed=loose_all,
-                         bed_margin=edge_margin, rotation_degrees=rotation,
-                         scale_to_fit=scale_to_fit)
+
+    st.markdown("### Adjust your mosaic")
+    with st.expander("Crop and framing", expanded=True):
+        crop_cols = st.columns(3)
+        crop_zoom = crop_cols[0].slider("Zoom", 1.0, 3.0, 1.0, 0.05,
+                                        help="Zoom in to crop closer to the subject.")
+        crop_x = crop_cols[1].slider("Horizontal position", 0.0, 1.0, 0.5, 0.01,
+                                     help="Move the crop from left to right.")
+        crop_y = crop_cols[2].slider("Vertical position", 0.0, 1.0, 0.5, 0.01,
+                                     help="Move the crop from top to bottom.")
+    with st.expander("Image adjustments", expanded=False):
+        adjust_cols = st.columns(4)
+        brightness = adjust_cols[0].slider("Brightness", 0.5, 1.5, 1.0, 0.05)
+        contrast = adjust_cols[1].slider("Contrast", 0.5, 1.8, 1.0, 0.05)
+        saturation = adjust_cols[2].slider("Color intensity", 0.0, 1.8, 1.0, 0.05)
+        sharpness = adjust_cols[3].slider("Sharpness", 0.0, 2.0, 1.0, 0.05)
+
+    preview_palette = L.palette_for_mode(palette_mode, selected_colors)
+    opts = L.Options(
+        grid=grid_size, palette_mode=palette_mode, selected_colors=selected_colors,
+        reserve_pct=reserve, dither=False, autocontrast=auto,
+        loose_include_needed=loose_all, bed_margin=edge_margin,
+        rotation_degrees=rotation, scale_to_fit=scale_to_fit,
+        crop_zoom=crop_zoom, crop_x=crop_x, crop_y=crop_y,
+        brightness=brightness, contrast=contrast, saturation=saturation,
+        sharpness=sharpness,
+    )
+    signature_values = (
+        hashlib.sha256(image_bytes).hexdigest(), grid_size, palette_mode, selected_colors,
+        reserve, auto, loose_all, edge_margin, rotation, scale_to_fit,
+        crop_zoom, crop_x, crop_y, brightness, contrast, saturation, sharpness,
+    )
+    current_result_signature = hashlib.sha256(repr(signature_values).encode("utf-8")).hexdigest()
+
+    if not preview_palette:
+        st.warning("Select at least one color to preview and generate the mosaic.")
+    else:
+        preview_idx = L.mosaic_indices(
+            source_image, grid_size, preview_palette,
+            autocontrast=auto, brightness=brightness, contrast=contrast,
+            saturation=saturation, sharpness=sharpness,
+            crop_zoom=crop_zoom, crop_x=crop_x, crop_y=crop_y,
+        )
+        st.subheader("Live mosaic preview")
+        st.caption(f"{grid_size}×{grid_size} studs · preview updates as you adjust the sliders")
+        st.image(L.render_preview_image(preview_idx, palette=preview_palette), use_container_width=True)
+
+    if st.button("Generate mosaic", type="primary", disabled=not preview_palette):
         try:
             with st.spinner("Generating (3D files may take a moment)…"):
-                res = L.generate(io.BytesIO(upload.getvalue()), get_output_dir(), options=opts)
+                res = L.generate(io.BytesIO(image_bytes), get_output_dir(), options=opts)
         except L.MosaicError as exc:
             st.error(str(exc))
             st.stop()
@@ -158,9 +203,10 @@ if upload is not None:
             st.exception(exc)
             st.stop()
         st.session_state["res"] = res
+        st.session_state["res_signature"] = current_result_signature
         st.session_state["palette_mode"] = palette_mode
 
-res = st.session_state.get("res")
+res = st.session_state.get("res") if st.session_state.get("res_signature") == current_result_signature else None
 if res:
     for w in res.warnings:
         st.warning(w)
