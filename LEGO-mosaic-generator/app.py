@@ -121,7 +121,7 @@ html, body, [class*="css"] { font-family:Inter,ui-sans-serif,system-ui,sans-seri
 .brand-copy p { margin:7px 0 0; color:#9299a6; font-size:.84rem; }
 .engine-badge { display:flex; align-items:center; gap:8px; white-space:nowrap; padding:7px 10px; border:1px solid #273a30; border-radius:7px; background:#111a15; color:#c7d7cd; font-size:.74rem; }
 .engine-badge span { width:7px; height:7px; border-radius:50%; background:#00ae42; }
-.stepper { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:0 0 22px; }
+.stepper { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:0 0 22px; }
 .step-item { display:flex; align-items:center; gap:10px; padding:10px 13px; border:1px solid #2d313a; border-radius:8px; background:#111318; color:#c4cad3; }
 .step-number { display:grid; place-items:center; width:25px; height:25px; flex:none; border:1px solid #424852; border-radius:50%; color:#aeb5c0; font-size:.76rem; font-weight:600; }
 .step-item.active { border-color:#00ae4266; background:#101712; color:#f2f4f6; }
@@ -141,9 +141,6 @@ html, body, [class*="css"] { font-family:Inter,ui-sans-serif,system-ui,sans-seri
 [data-testid="stSlider"] [role="slider"] { background:#0d9488; border-color:#0d9488; }
 [data-testid="stSlider"] [data-baseweb="slider"] > div > div { background:#0d9488; }
 #preview-workspace-anchor { height:0; }
-@media (min-width:850px) {
-  div[data-testid="column"]:has(#preview-workspace-anchor) { position:sticky; top:1rem; align-self:flex-start; max-height:calc(100vh - 2rem); overflow-y:auto; padding-right:4px; }
-}
 .preview-card { padding:14px; border:1px solid #2d313a; border-radius:8px; background:#0d0f13; margin:8px 0 16px; }
 .parts-table { width:100%; border-collapse:collapse; font-size:.82rem; }
 .parts-table th { padding:8px 4px; color:#9299a6; text-align:left; font-weight:500; border-bottom:1px solid #2d313a; }
@@ -161,7 +158,7 @@ html, body, [class*="css"] { font-family:Inter,ui-sans-serif,system-ui,sans-seri
 @media (max-width:850px) {
   .main .block-container { padding:1rem .75rem 2rem; }
   .app-header { align-items:flex-start; flex-direction:column; }
-  .stepper { grid-template-columns:1fr; gap:6px; }
+  .stepper { grid-template-columns:repeat(2,1fr); gap:6px; }
   [data-testid="stVerticalBlockBorderWrapper"] { padding:10px; }
 }
 </style>
@@ -190,8 +187,8 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-active_step = 3 if st.session_state.get("res") else 2 if st.session_state.get("image_upload") else 1
-step_labels = ("Upload & Format", "Image Editing", "Colors · Preview & Export")
+active_step = 4 if st.session_state.get("res") else 2 if st.session_state.get("image_upload") else 1
+step_labels = ("Upload & Crop", "Format & Adjust", "Color Palette", "Preview & Export")
 step_items = []
 for step_number, step_label in enumerate(step_labels, start=1):
     status = "active" if step_number == active_step else "done" if step_number < active_step else ""
@@ -202,13 +199,13 @@ for step_number, step_label in enumerate(step_labels, start=1):
     )
 st.markdown(f'<div class="stepper" aria-label="Mosaic workflow">{"".join(step_items)}</div>', unsafe_allow_html=True)
 
-control_col, workspace_col = st.columns([0.35, 0.65], gap="large")
+control_col = st.container()
 
 # Left: grouped controls
 with control_col:
     st.markdown('<h2 class="workspace-title">Control Center</h2>', unsafe_allow_html=True)
 
-    with st.expander("01 · Upload & Format", expanded=True):
+    with st.expander("01 · Upload & Crop", expanded=True):
         st.markdown(
             '''<div class="upload-copy">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -221,35 +218,21 @@ with control_col:
             "Image (JPG/PNG)", type=["jpg", "jpeg", "png"],
             label_visibility="collapsed", key="image_upload",
         )
-        grid_size = st.selectbox(
-            "Mosaic format", [24, 30, 48, 60], index=2,
-            format_func=lambda x: f"{x}×{x} studs" + (f" (4 tiles of {x // 2}×{x // 2})" if x in (48, 60) else " (1 plate)"),
-        )
-        reserve = st.number_input("Reserve (%)", 0.0, 100.0, 5.0, 1.0)
+        source_image = None
+        image_bytes = None
+        if upload is not None:
+            try:
+                image_bytes = upload.getvalue()
+                source_image = L.load_image(io.BytesIO(image_bytes))
+            except L.MosaicError as exc:
+                st.error(str(exc))
+                st.stop()
 
-    # Load once so the cropper can stay in the editing accordion.
-    source_image = None
-    image_bytes = None
-    if upload is not None:
-        try:
-            image_bytes = upload.getvalue()
-            source_image = L.load_image(io.BytesIO(image_bytes))
-        except L.MosaicError as exc:
-            st.error(str(exc))
-            st.stop()
-
-    crop_zoom, crop_x, crop_y = 1.0, 0.5, 0.5
-    brightness = contrast = saturation = sharpness = 1.0
-    cropped_image = None
-    processed_image_bytes = None
-    with st.expander("02 · Image Editing", expanded=upload is not None):
-        auto = st.checkbox("Auto-enhance contrast", value=True)
-        brightness = st.slider("Brightness", 0.5, 2.0, 1.0, 0.05, format="%.2f")
-        contrast = st.slider("Contrast", 0.5, 2.0, 1.0, 0.05, format="%.2f")
-        extra_cols = st.columns(2, gap="small")
-        saturation = extra_cols[0].slider("Color intensity", 0.0, 1.8, 1.0, 0.05)
-        sharpness = extra_cols[1].slider("Sharpness", 0.0, 2.0, 1.0, 0.05)
+        crop_zoom, crop_x, crop_y = 1.0, 0.5, 0.5
+        cropped_image = None
+        processed_image_bytes = None
         if source_image is not None:
+            st.markdown("**Adjust your mosaic**")
             st.caption("Drag the square to move it; drag the corner to resize.")
             crop_display = source_image.copy()
             crop_display.thumbnail((600, 600))
@@ -279,9 +262,24 @@ with control_col:
             cropped_image.save(cropped_buffer, format="PNG")
             processed_image_bytes = cropped_buffer.getvalue()
         else:
-            auto = st.session_state.get("auto_enhance", True)
-            st.caption("Upload a photo to unlock the crop and live image controls.")
+            st.caption("Upload a photo to choose the area used for your mosaic.")
 
+    # Format and image controls follow the crop tool in the workflow.
+    crop_zoom, crop_x, crop_y = 1.0, 0.5, 0.5
+    brightness = contrast = saturation = sharpness = 1.0
+    auto = st.session_state.get("auto_enhance", True)
+    with st.expander("02 · Format & Image Adjustments", expanded=upload is not None):
+        grid_size = st.selectbox(
+            "Mosaic format", [24, 30, 48, 60], index=2,
+            format_func=lambda x: f"{x}×{x} studs" + (f" (4 tiles of {x // 2}×{x // 2})" if x in (48, 60) else " (1 plate)"),
+        )
+        reserve = st.number_input("Reserve (%)", 0.0, 100.0, 5.0, 1.0)
+        auto = st.checkbox("Auto-enhance contrast", value=True)
+        brightness = st.slider("Brightness", 0.5, 2.0, 1.0, 0.05, format="%.2f")
+        contrast = st.slider("Contrast", 0.5, 2.0, 1.0, 0.05, format="%.2f")
+        extra_cols = st.columns(2, gap="small")
+        saturation = extra_cols[0].slider("Color intensity", 0.0, 1.8, 1.0, 0.05)
+        sharpness = extra_cols[1].slider("Sharpness", 0.0, 2.0, 1.0, 0.05)
     with st.expander("03 · Color Palette", expanded=True):
         mode_label = st.radio("Palette", ["Color", "Grayscale"], horizontal=True)
         palette_mode = "color" if mode_label == "Color" else "grayscale"
@@ -360,9 +358,10 @@ if cropped_image is not None:
     )
     current_result_signature = hashlib.sha256(repr(signature_values).encode("utf-8")).hexdigest()
 
-# Right: sticky live preview, BOM, generation status, and project exports
+# Step 4: live preview, BOM, generation status, and project exports
+workspace_col = st.container()
 with workspace_col:
-    st.markdown('<div id="preview-workspace-anchor"></div><h2 class="workspace-title">Live Preview Workspace</h2>', unsafe_allow_html=True)
+    st.markdown('<div id="preview-workspace-anchor"></div><h2 class="workspace-title">04 · Live Preview &amp; Export</h2>', unsafe_allow_html=True)
     res = st.session_state.get("res") if st.session_state.get("res_signature") == current_result_signature else None
     if preview_idx is not None:
         st.markdown(f"**Mosaic preview · {grid_size}×{grid_size} studs**")
