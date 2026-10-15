@@ -66,6 +66,47 @@ def render_color_swatch(color) -> None:
     )
 
 
+def render_color_swatch_row(colors) -> None:
+    """Render selected Bambu colors in one compact, horizontal row."""
+    swatches = []
+    for index, color in enumerate(colors):
+        title = html.escape(
+            f"Bambu Lab: {color.name_en} ({color.code} · {color.hex})", quote=True
+        )
+        swatches.append(
+            f'<button class="palette-swatch" type="button" title="{title}" '
+            f'aria-label="Copy {html.escape(color.hex, quote=True)}" '
+            f'style="background-color:{html.escape(color.hex, quote=True)} !important" '
+            f'data-color="{html.escape(color.hex, quote=True)}" data-index="{index}"></button>'
+        )
+    components.html(
+        """<!doctype html><html><head><style>
+        html,body{margin:0;width:100%;height:34px;background:transparent;}
+        .palette-row{height:34px;display:flex;align-items:center;gap:7px;overflow-x:auto;overflow-y:hidden;}
+        .palette-swatch{box-sizing:border-box;flex:0 0 24px;width:24px;height:24px;padding:0;
+          border:2px solid #151820;border-radius:50%;outline:1px solid #d7dce3;cursor:pointer;}
+        .palette-swatch:hover{outline:2px solid #fff;outline-offset:1px;}
+        .palette-swatch.copied{outline:2px solid #0d9488;outline-offset:2px;}
+        </style></head><body><div class="palette-row">"""
+        + "".join(swatches)
+        + """</div><script>
+        document.querySelectorAll('.palette-swatch').forEach((swatch)=>{
+          swatch.addEventListener('click',async()=>{
+            const color=swatch.dataset.color;
+            try{await navigator.clipboard.writeText(color);}
+            catch(error){const field=document.createElement('textarea');field.value=color;
+              field.style.position='fixed';field.style.opacity='0';document.body.appendChild(field);
+              field.select();document.execCommand('copy');field.remove();}
+            swatch.classList.add('copied');
+            setTimeout(()=>swatch.classList.remove('copied'),1000);
+          });
+        });
+        </script></body></html>""",
+        height=36,
+        scrolling=False,
+    )
+
+
 def render_bom_table(rows) -> None:
     """Render the current parts count in a compact table."""
     table_rows = []
@@ -218,6 +259,8 @@ with control_col:
             "Image (JPG/PNG)", type=["jpg", "jpeg", "png"],
             label_visibility="collapsed", key="image_upload",
         )
+        color_swatches_slot = st.empty()
+        original_col, live_preview_col = st.columns(2, gap="medium")
         source_image = None
         image_bytes = None
         if upload is not None:
@@ -231,38 +274,41 @@ with control_col:
         crop_zoom, crop_x, crop_y = 1.0, 0.5, 0.5
         cropped_image = None
         processed_image_bytes = None
-        if source_image is not None:
-            st.markdown("**Adjust your mosaic**")
-            st.caption("Drag the square to move it; drag the corner to resize.")
-            crop_display = source_image.copy()
-            crop_display.thumbnail((600, 600))
-            crop_display_buffer = io.BytesIO()
-            crop_display.save(crop_display_buffer, format="PNG")
-            crop_value = square_cropper(
-                image_data=base64.b64encode(crop_display_buffer.getvalue()).decode("ascii"),
-                key=f"mosaic_cropper_{hashlib.sha256(image_bytes).hexdigest()[:12]}",
-                default={"left": 0.2, "top": 0.2, "size": 0.6},
-            )
-            crop_width, crop_height = source_image.size
-            if not isinstance(crop_value, dict):
-                default_side = 0.6 * min(crop_width, crop_height)
-                crop_value = {
-                    "left": (crop_width - default_side) / (2 * crop_width),
-                    "top": (crop_height - default_side) / (2 * crop_height),
-                    "size": 0.6,
-                }
-            crop_size = max(1, min(
-                min(crop_width, crop_height),
-                round(float(crop_value.get("size", 0.6)) * min(crop_width, crop_height)),
-            ))
-            crop_left = max(0, min(crop_width - crop_size, round(float(crop_value.get("left", 0.2)) * crop_width)))
-            crop_top = max(0, min(crop_height - crop_size, round(float(crop_value.get("top", 0.2)) * crop_height)))
-            cropped_image = source_image.crop((crop_left, crop_top, crop_left + crop_size, crop_top + crop_size))
-            cropped_buffer = io.BytesIO()
-            cropped_image.save(cropped_buffer, format="PNG")
-            processed_image_bytes = cropped_buffer.getvalue()
-        else:
-            st.caption("Upload a photo to choose the area used for your mosaic.")
+        with original_col:
+            st.markdown("**Original photo · crop**")
+            if source_image is not None:
+                st.caption("Drag the square to move it; drag the corner to resize.")
+                crop_display = source_image.copy()
+                crop_display.thumbnail((800, 800))
+                crop_display_buffer = io.BytesIO()
+                crop_display.save(crop_display_buffer, format="PNG")
+                crop_value = square_cropper(
+                    image_data=base64.b64encode(crop_display_buffer.getvalue()).decode("ascii"),
+                    key=f"mosaic_cropper_{hashlib.sha256(image_bytes).hexdigest()[:12]}",
+                    default={"left": 0.2, "top": 0.2, "size": 0.6},
+                )
+                crop_width, crop_height = source_image.size
+                if not isinstance(crop_value, dict):
+                    default_side = 0.6 * min(crop_width, crop_height)
+                    crop_value = {
+                        "left": (crop_width - default_side) / (2 * crop_width),
+                        "top": (crop_height - default_side) / (2 * crop_height),
+                        "size": 0.6,
+                    }
+                crop_size = max(1, min(
+                    min(crop_width, crop_height),
+                    round(float(crop_value.get("size", 0.6)) * min(crop_width, crop_height)),
+                ))
+                crop_left = max(0, min(crop_width - crop_size, round(float(crop_value.get("left", 0.2)) * crop_width)))
+                crop_top = max(0, min(crop_height - crop_size, round(float(crop_value.get("top", 0.2)) * crop_height)))
+                cropped_image = source_image.crop((crop_left, crop_top, crop_left + crop_size, crop_top + crop_size))
+                cropped_buffer = io.BytesIO()
+                cropped_image.save(cropped_buffer, format="PNG")
+                processed_image_bytes = cropped_buffer.getvalue()
+            else:
+                st.caption("Upload a photo to choose the area used for your mosaic.")
+        with live_preview_col:
+            live_preview_slot = st.empty()
 
     # Format and image controls follow the crop tool in the workflow.
     crop_zoom, crop_x, crop_y = 1.0, 0.5, 0.5
@@ -358,18 +404,28 @@ if cropped_image is not None:
     )
     current_result_signature = hashlib.sha256(repr(signature_values).encode("utf-8")).hexdigest()
 
+# Keep the chosen palette in one row above the original and mosaic previews.
+if preview_palette:
+    with color_swatches_slot.container():
+        render_color_swatch_row(preview_palette)
+
+# The crop tool and mosaic preview share one 50/50 comparison row.
+with live_preview_slot.container():
+    st.markdown("**Live mosaic preview**")
+    if preview_idx is not None:
+        st.image(
+            L.render_preview_image(preview_idx, cell=max(7, 520 // grid_size), palette=preview_palette),
+            use_container_width=True,
+        )
+    else:
+        st.caption("Upload a photo to see the live mosaic preview.")
+
 # Step 4: live preview, BOM, generation status, and project exports
 workspace_col = st.container()
 with workspace_col:
     st.markdown('<div id="preview-workspace-anchor"></div><h2 class="workspace-title">04 · Live Preview &amp; Export</h2>', unsafe_allow_html=True)
     res = st.session_state.get("res") if st.session_state.get("res_signature") == current_result_signature else None
     if preview_idx is not None:
-        st.markdown(f"**Mosaic preview · {grid_size}×{grid_size} studs**")
-        with st.container(border=True):
-            st.image(
-                L.render_preview_image(preview_idx, cell=max(7, 520 // grid_size), palette=preview_palette),
-                use_container_width=True,
-            )
         st.markdown("**Parts overview**")
         render_bom_table(live_bom)
     else:
