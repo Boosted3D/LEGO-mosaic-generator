@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html, body { margin: 0; padding: 0; width: 100%; background: transparent; }
+      body { overflow: hidden; }
+      #cropper { width: 100%; }
+      #stage { position: relative; display: inline-block; max-width: 100%; vertical-align: top; }
+      #photo { display: block; max-width: 100%; max-height: 430px; width: auto; height: auto; user-select: none; -webkit-user-drag: none; }
+      #crop-frame { position: absolute; box-sizing: border-box; border: 2px solid #00ae42; box-shadow: 0 0 0 9999px rgba(0, 0, 0, .40); cursor: move; touch-action: none; }
+      #resize-handle { position: absolute; right: 3px; bottom: 3px; width: 18px; height: 18px; box-sizing: border-box; border: 2px solid #fff; border-radius: 50%; background: #00ae42; cursor: nwse-resize; touch-action: none; }
+      #status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="cropper">
+      <div id="stage">
+        <img id="photo" alt="Photo crop area" draggable="false" />
+        <div id="crop-frame" role="slider" aria-label="Square photo crop. Drag to move; use the corner handle to resize." tabindex="0">
+          <div id="resize-handle" aria-hidden="true"></div>
+        </div>
+      </div>
+      <span id="status" aria-live="polite"></span>
+    </div>
+    <script src="main.js"></script>
+  </body>
+</html>

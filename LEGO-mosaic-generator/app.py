@@ -3,14 +3,19 @@ import io
 import html
 import hashlib
 import json
+import base64
 import tempfile
 from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_cropper import st_cropper
 
 import lego_mosaic as L
+
+square_cropper = components.declare_component(
+    "mosaic_square_cropper",
+    path=str(Path(__file__).parent / "square_cropper_component"),
+)
 
 
 def set_color_selection(selected: bool) -> None:
@@ -185,18 +190,39 @@ if upload is not None:
     st.markdown("### Adjust your mosaic")
     crop_col, mosaic_col = st.columns(2, gap="medium")
     with crop_col:
-        st.caption("Drag the square over your photo to choose the crop")
-        cropped_image = st_cropper(
-            source_image,
-            realtime_update=True,
-            box_color="#00AE42",
-            aspect_ratio=(1, 1),
-            return_type="image",
-            should_resize_image=True,
+        st.caption("Drag the square to move it; drag the corner to resize")
+        crop_display = source_image.copy()
+        crop_display.thumbnail((700, 700))
+        crop_display_buffer = io.BytesIO()
+        crop_display.save(crop_display_buffer, format="PNG")
+        crop_value = square_cropper(
+            image_data=base64.b64encode(crop_display_buffer.getvalue()).decode("ascii"),
             key=f"mosaic_cropper_{hashlib.sha256(image_bytes).hexdigest()[:12]}",
+            default={"left": 0.2, "top": 0.2, "size": 0.6},
         )
-    if cropped_image is None:
-        cropped_image = source_image
+    crop_width, crop_height = source_image.size
+    if not isinstance(crop_value, dict):
+        default_side = 0.6 * min(crop_width, crop_height)
+        crop_value = {
+            "left": (crop_width - default_side) / (2 * crop_width),
+            "top": (crop_height - default_side) / (2 * crop_height),
+            "size": 0.6,
+        }
+    crop_size = max(1, min(
+        min(crop_width, crop_height),
+        round(float(crop_value.get("size", 0.6)) * min(crop_width, crop_height)),
+    ))
+    crop_left = max(0, min(
+        crop_width - crop_size,
+        round(float(crop_value.get("left", 0.2)) * crop_width),
+    ))
+    crop_top = max(0, min(
+        crop_height - crop_size,
+        round(float(crop_value.get("top", 0.2)) * crop_height),
+    ))
+    cropped_image = source_image.crop((
+        crop_left, crop_top, crop_left + crop_size, crop_top + crop_size,
+    ))
     crop_zoom, crop_x, crop_y = 1.0, 0.5, 0.5
     cropped_buffer = io.BytesIO()
     cropped_image.save(cropped_buffer, format="PNG")
