@@ -139,5 +139,5 @@
   });
 
   post("streamlit:componentReady", { apiVersion: 1 });
-  post("streamlit:setFrameHeight", { height: 440 });
+  post("streamlit:setFrameHeight", { height: 510 });
 })();

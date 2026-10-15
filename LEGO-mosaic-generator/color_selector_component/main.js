@@ -44,10 +44,11 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "swatch";
-      button.style.setProperty("background-color", color.hex, "important");
+      const isSelected = selected.has(color.code);
+      button.style.setProperty("background-color", isSelected ? color.hex : "#0e1117", "important");
       button.title = `Bambu Lab: ${color.name} (${color.code} · ${color.hex})`;
       button.setAttribute("aria-label", `${color.name}, ${color.code}, ${color.hex}`);
-      button.setAttribute("aria-pressed", selected.has(color.code) ? "true" : "false");
+      button.setAttribute("aria-pressed", isSelected ? "true" : "false");
       button.addEventListener("click", () => {
         const next = new Set(lastArgs.selected_codes || []);
         if (next.has(color.code)) next.delete(color.code);
