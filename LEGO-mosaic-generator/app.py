@@ -17,11 +17,10 @@ square_cropper = components.declare_component(
     "mosaic_square_cropper",
     path=str(Path(__file__).parent / "square_cropper_component"),
 )
-
-
-def set_color_selection(selected: bool) -> None:
-    for color in L.COLOR_PALETTE:
-        st.session_state[f"use_color_{color.code}"] = selected
+color_swatch_selector = components.declare_component(
+    "mosaic_color_swatch_selector",
+    path=str(Path(__file__).parent / "color_selector_component"),
+)
 
 
 def get_output_dir() -> Path:
@@ -31,43 +30,8 @@ def get_output_dir() -> Path:
     return Path(st.session_state["output_dir"])
 
 
-def render_color_swatch(color) -> None:
-    """Show a palette swatch with its Bambu name tooltip and copy action."""
-    title = html.escape(
-        f"Bambu Lab: {color.name_en} ({color.code} · {color.hex})", quote=True
-    )
-    components.html(
-        f"""<!doctype html><html><head><style>
-        html,body{{margin:0;width:100%;height:32px;background:transparent;}}
-        body{{display:flex;align-items:center;justify-content:center;}}
-        button{{width:20px;height:20px;padding:0;border:1px solid #ffffff66;
-          border-radius:50%;background-color:{color.hex} !important;cursor:pointer;}}
-        button:hover{{outline:2px solid #ffffffaa;outline-offset:2px;}}
-        button.copied{{outline:2px solid #0d9488;outline-offset:2px;}}
-        </style></head><body>
-        <button id="swatch" type="button" title="{title}"
-          aria-label="Copy {color.hex}"></button>
-        <script>
-        const swatch=document.getElementById("swatch");
-        const color={json.dumps(color.hex)};
-        swatch.addEventListener("click",async()=>{{
-          try{{await navigator.clipboard.writeText(color);}}
-          catch(error){{
-            const field=document.createElement("textarea");
-            field.value=color;field.style.position="fixed";field.style.opacity="0";
-            document.body.appendChild(field);field.select();document.execCommand("copy");field.remove();
-          }}
-          swatch.classList.add("copied");swatch.title="Copied "+color;
-          setTimeout(()=>{{swatch.classList.remove("copied");swatch.title={json.dumps(title)};}},1200);
-        }});
-        </script></body></html>""",
-        height=32,
-        scrolling=False,
-    )
-
-
-def render_color_swatch_row(colors) -> None:
-    """Render selected Bambu colors in one compact, horizontal row."""
+def render_color_swatch_legend(colors) -> None:
+    """Render a non-interactive swatch legend for grayscale mode."""
     swatches = []
     for index, color in enumerate(colors):
         title = html.escape(
@@ -85,23 +49,9 @@ def render_color_swatch_row(colors) -> None:
         .palette-row{height:34px;display:flex;align-items:center;gap:7px;overflow-x:auto;overflow-y:hidden;}
         .palette-swatch{box-sizing:border-box;flex:0 0 24px;width:24px;height:24px;padding:0;
           border:2px solid #151820;border-radius:50%;outline:1px solid #d7dce3;cursor:pointer;}
-        .palette-swatch:hover{outline:2px solid #fff;outline-offset:1px;}
-        .palette-swatch.copied{outline:2px solid #0d9488;outline-offset:2px;}
         </style></head><body><div class="palette-row">"""
         + "".join(swatches)
-        + """</div><script>
-        document.querySelectorAll('.palette-swatch').forEach((swatch)=>{
-          swatch.addEventListener('click',async()=>{
-            const color=swatch.dataset.color;
-            try{await navigator.clipboard.writeText(color);}
-            catch(error){const field=document.createElement('textarea');field.value=color;
-              field.style.position='fixed';field.style.opacity='0';document.body.appendChild(field);
-              field.select();document.execCommand('copy');field.remove();}
-            swatch.classList.add('copied');
-            setTimeout(()=>swatch.classList.remove('copied'),1000);
-          });
-        });
-        </script></body></html>""",
+        + """</div></body></html>""",
         height=36,
         scrolling=False,
     )
@@ -330,31 +280,6 @@ with control_col:
         mode_label = st.radio("Palette", ["Color", "Grayscale"], horizontal=True)
         palette_mode = "color" if mode_label == "Color" else "grayscale"
         selected_colors = None
-        if palette_mode == "color":
-            select_all_col, clear_all_col = st.columns(2, gap="small")
-            select_all_col.button("Select all", use_container_width=True, on_click=set_color_selection, args=(True,))
-            clear_all_col.button("Clear all", use_container_width=True, on_click=set_color_selection, args=(False,))
-            selected_codes = []
-            color_columns = st.columns(2, gap="small")
-            for index, color in enumerate(L.COLOR_PALETTE):
-                with color_columns[index % 2]:
-                    with st.container(border=True):
-                        swatch_col, name_col, toggle_col = st.columns([0.55, 2.1, 0.75], gap="small")
-                        with swatch_col:
-                            render_color_swatch(color)
-                        with name_col:
-                            st.markdown(
-                                f'<div class="color-name">{html.escape(color.name_en)}</div>',
-                                unsafe_allow_html=True,
-                            )
-                        with toggle_col:
-                            checked = st.toggle(
-                                f"Use {color.name_en}", value=True,
-                                key=f"use_color_{color.code}", label_visibility="collapsed",
-                            )
-                        if checked:
-                            selected_codes.append(color.code)
-            selected_colors = tuple(selected_codes)
 
     with st.expander("Additional Print Settings", expanded=False):
         loose_all = st.checkbox("Include loose studs (needed + reserve)", value=True)
@@ -373,6 +298,33 @@ with control_col:
         st.caption(f"Minimum space between studs: {L.MIN_STUD_GAP_MM:.1f} mm")
 
 # Build the same image-to-stud grid used by the generator for instant live updates.
+# The swatch row is the color selector and remains directly above both previews.
+if palette_mode == "color":
+    color_codes = tuple(color.code for color in L.COLOR_PALETTE)
+    selected_codes = tuple(
+        code for code in color_codes
+        if code in st.session_state.get("selected_color_codes", color_codes)
+    )
+    with color_swatches_slot.container():
+        selected_result = color_swatch_selector(
+            colors=[
+                {"code": color.code, "name": color.name_en, "hex": color.hex}
+                for color in L.COLOR_PALETTE
+            ],
+            selected_codes=list(selected_codes),
+            key="mosaic_color_selector",
+        )
+    if isinstance(selected_result, (list, tuple)):
+        selected_codes = tuple(code for code in color_codes if code in selected_result)
+        st.session_state["selected_color_codes"] = selected_codes
+    elif "selected_color_codes" not in st.session_state:
+        st.session_state["selected_color_codes"] = selected_codes
+    selected_colors = tuple(st.session_state["selected_color_codes"])
+else:
+    selected_colors = None
+    with color_swatches_slot.container():
+        render_color_swatch_legend(L.GRAYSCALE_PALETTE)
+
 preview_palette = L.palette_for_mode(palette_mode, selected_colors)
 preview_idx = None
 current_result_signature = "__no_image__"
@@ -403,11 +355,6 @@ if cropped_image is not None:
         brightness, contrast, saturation, sharpness,
     )
     current_result_signature = hashlib.sha256(repr(signature_values).encode("utf-8")).hexdigest()
-
-# Keep the chosen palette in one row above the original and mosaic previews.
-if preview_palette:
-    with color_swatches_slot.container():
-        render_color_swatch_row(preview_palette)
 
 # The crop tool and mosaic preview share one 50/50 comparison row.
 with live_preview_slot.container():
