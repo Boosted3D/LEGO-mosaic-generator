@@ -17,17 +17,24 @@ square_cropper = components.declare_component(
     "mosaic_square_cropper",
     path=str(Path(__file__).parent / "square_cropper_component"),
 )
-color_swatch_selector = components.declare_component(
-    "mosaic_color_swatch_selector",
-    path=str(Path(__file__).parent / "color_selector_component"),
-)
-
-
 def get_output_dir() -> Path:
     """Use a writable, isolated output directory for each browser session."""
     if "output_dir" not in st.session_state:
         st.session_state["output_dir"] = tempfile.mkdtemp(prefix="lego-mosaic-")
     return Path(st.session_state["output_dir"])
+
+
+def toggle_palette_color(code: str) -> None:
+    """Toggle one palette color using Streamlit's native widget state."""
+    palette_codes = tuple(color.code for color in L.COLOR_PALETTE)
+    selected = set(st.session_state.get("selected_color_codes", palette_codes))
+    if code in selected:
+        selected.remove(code)
+    else:
+        selected.add(code)
+    st.session_state["selected_color_codes"] = tuple(
+        palette_code for palette_code in palette_codes if palette_code in selected
+    )
 
 
 def render_color_swatch_legend(colors) -> None:
@@ -225,24 +232,41 @@ with control_col:
         palette_mode = "color" if mode_label == "Color" else "grayscale"
         if palette_mode == "color":
             color_codes = tuple(color.code for color in L.COLOR_PALETTE)
+            if "selected_color_codes" not in st.session_state:
+                st.session_state["selected_color_codes"] = color_codes
             selected_codes = tuple(
                 code for code in color_codes
-                if code in st.session_state.get("selected_color_codes", color_codes)
+                if code in st.session_state["selected_color_codes"]
             )
-            with swatches_col:
-                selected_result = color_swatch_selector(
-                    colors=[
-                        {"code": color.code, "name": color.name_en, "hex": color.hex}
-                        for color in L.COLOR_PALETTE
-                    ],
-                    selected_codes=list(selected_codes),
-                    key="mosaic_color_selector",
+            selector_css = []
+            for color in L.COLOR_PALETTE:
+                selected = color.code in selected_codes
+                fill = color.hex if selected else "#0e1117"
+                border = "#22c55e" if selected else "#78818d"
+                ring = "0 0 0 1.5px #22c55e" if selected else "none"
+                selector_css.append(
+                    f".st-key-palette_{color.code} button {{"
+                    f"width:24px!important;min-width:24px!important;max-width:24px!important;"
+                    f"height:24px!important;min-height:24px!important;padding:0!important;"
+                    f"font-size:0!important;color:transparent!important;"
+                    f"border:1px solid {border}!important;border-radius:50%!important;"
+                    f"background:{fill}!important;box-shadow:{ring}!important;"
+                    f"}}"
+                    f".st-key-palette_{color.code} button:hover {{"
+                    f"border-color:{border}!important;filter:brightness(1.15);}}"
                 )
-            if isinstance(selected_result, (list, tuple)):
-                selected_codes = tuple(code for code in color_codes if code in selected_result)
-                st.session_state["selected_color_codes"] = selected_codes
-            elif "selected_color_codes" not in st.session_state:
-                st.session_state["selected_color_codes"] = selected_codes
+            st.markdown("<style>" + "".join(selector_css) + "</style>", unsafe_allow_html=True)
+            with swatches_col:
+                swatch_columns = st.columns(len(L.COLOR_PALETTE), gap=None)
+                for column, color in zip(swatch_columns, L.COLOR_PALETTE):
+                    with column:
+                        st.button(
+                            " ",
+                            key=f"palette_{color.code}",
+                            help=f"Bambu Lab {color.name_en} · {color.code} · {color.hex}",
+                            on_click=toggle_palette_color,
+                            args=(color.code,),
+                        )
             selected_colors = tuple(st.session_state["selected_color_codes"])
         else:
             selected_colors = None
