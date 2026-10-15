@@ -4,6 +4,7 @@
   const buttons = new Map();
   let colors = [];
   let selectedCodes = new Set();
+  let pendingSelection = null;
 
   const post = (type, extra = {}) => window.parent.postMessage({
     isStreamlitMessage: true,
@@ -13,6 +14,12 @@
 
   function orderedSelection() {
     return colors.filter((color) => selectedCodes.has(color.code)).map((color) => color.code);
+  }
+
+  function sameSelection(left, right) {
+    const a = new Set(left);
+    const b = new Set(right);
+    return a.size === b.size && [...a].every((code) => b.has(code));
   }
 
   function syncButton(button, color) {
@@ -40,6 +47,7 @@
 
     for (const item of colors) syncButton(buttons.get(item.code), item);
     const value = orderedSelection();
+    pendingSelection = value;
     status.textContent = `${color.name} ${selectedCodes.has(code) ? "selected" : "removed"}; ${color.hex} copied`;
     copyHex(color.hex);
     post("streamlit:setComponentValue", { value, dataType: "json" });
@@ -47,7 +55,16 @@
 
   function render(args) {
     colors = Array.isArray(args.colors) ? args.colors : [];
-    selectedCodes = new Set(Array.isArray(args.selected_codes) ? args.selected_codes : []);
+    const incomingSelection = Array.isArray(args.selected_codes) ? args.selected_codes : [];
+    if (pendingSelection && sameSelection(incomingSelection, pendingSelection)) {
+      pendingSelection = null;
+      selectedCodes = new Set(incomingSelection);
+    } else if (pendingSelection) {
+      // Keep the immediate click state while Streamlit sends the updated value back.
+      selectedCodes = new Set(pendingSelection);
+    } else {
+      selectedCodes = new Set(incomingSelection);
+    }
     const currentCodes = new Set(colors.map((color) => color.code));
 
     for (const [code, button] of buttons) {

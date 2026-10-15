@@ -38,7 +38,10 @@
         -webkit-appearance: none;
         transition: border-color .12s ease, border-width .12s ease;
       }
-      .swatch[aria-pressed="true"] { border: 2px solid #22c55e; }
+      .swatch[aria-pressed="true"] {
+        border: 1px solid #22c55e;
+        box-shadow: 0 0 0 2px #22c55e;
+      }
       .swatch:hover { border-color: #e7ebef; }
       .swatch[aria-pressed="true"]:hover { border-color: #22c55e; }
       .swatch:focus { outline: none; }
