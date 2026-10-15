@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 import streamlit as st
+from streamlit_cropper import st_cropper
 
 import lego_mosaic as L
 
@@ -146,14 +147,25 @@ if upload is not None:
         st.stop()
 
     st.markdown("### Adjust your mosaic")
-    with st.expander("Crop and framing", expanded=True):
-        crop_cols = st.columns(3)
-        crop_zoom = crop_cols[0].slider("Zoom", 1.0, 3.0, 1.0, 0.05,
-                                        help="Zoom in to crop closer to the subject.")
-        crop_x = crop_cols[1].slider("Horizontal position", 0.0, 1.0, 0.5, 0.01,
-                                     help="Move the crop from left to right.")
-        crop_y = crop_cols[2].slider("Vertical position", 0.0, 1.0, 0.5, 0.01,
-                                     help="Move the crop from top to bottom.")
+    crop_col, mosaic_col = st.columns(2, gap="medium")
+    with crop_col:
+        st.caption("Drag the square over your photo to choose the crop")
+        cropped_image = st_cropper(
+            source_image,
+            realtime_update=True,
+            box_color="#00AE42",
+            aspect_ratio=(1, 1),
+            return_type="image",
+            should_resize_image=True,
+            key=f"mosaic_cropper_{hashlib.sha256(image_bytes).hexdigest()[:12]}",
+        )
+    if cropped_image is None:
+        cropped_image = source_image
+    crop_zoom, crop_x, crop_y = 1.0, 0.5, 0.5
+    cropped_buffer = io.BytesIO()
+    cropped_image.save(cropped_buffer, format="PNG")
+    processed_image_bytes = cropped_buffer.getvalue()
+
     with st.expander("Image adjustments", expanded=False):
         adjust_cols = st.columns(4)
         brightness = adjust_cols[0].slider("Brightness", 0.5, 1.5, 1.0, 0.05)
@@ -172,7 +184,8 @@ if upload is not None:
         sharpness=sharpness,
     )
     signature_values = (
-        hashlib.sha256(image_bytes).hexdigest(), grid_size, palette_mode, selected_colors,
+        hashlib.sha256(image_bytes).hexdigest(), hashlib.sha256(processed_image_bytes).hexdigest(),
+        grid_size, palette_mode, selected_colors,
         reserve, auto, loose_all, edge_margin, rotation, scale_to_fit,
         crop_zoom, crop_x, crop_y, brightness, contrast, saturation, sharpness,
     )
@@ -182,19 +195,11 @@ if upload is not None:
         st.warning("Select at least one color to preview and generate the mosaic.")
     else:
         preview_idx = L.mosaic_indices(
-            source_image, grid_size, preview_palette,
+            cropped_image, grid_size, preview_palette,
             autocontrast=auto, brightness=brightness, contrast=contrast,
             saturation=saturation, sharpness=sharpness,
             crop_zoom=crop_zoom, crop_x=crop_x, crop_y=crop_y,
         )
-        st.subheader("Live preview")
-        photo_col, mosaic_col = st.columns(2, gap="medium")
-        with photo_col:
-            st.caption("Original photo · square crop")
-            st.image(
-                L.render_crop_guide(source_image, crop_zoom, crop_x, crop_y),
-                width=420,
-            )
         with mosaic_col:
             st.caption(f"Mosaic · {grid_size}×{grid_size} studs")
             preview_cell_size = max(7, 420 // grid_size)
@@ -208,7 +213,7 @@ if upload is not None:
     if st.button("Generate mosaic", type="primary", disabled=not preview_palette):
         try:
             with st.spinner("Generating (3D files may take a moment)…"):
-                res = L.generate(io.BytesIO(image_bytes), get_output_dir(), options=opts)
+                res = L.generate(io.BytesIO(processed_image_bytes), get_output_dir(), options=opts)
         except L.MosaicError as exc:
             st.error(str(exc))
             st.stop()

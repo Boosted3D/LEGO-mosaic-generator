@@ -702,29 +702,6 @@ def _crop_square(
     return img.crop((left, top, left + side, top + side))
 
 
-def render_crop_guide(
-    img: Image.Image,
-    zoom: float = 1.0,
-    crop_x: float = 0.5,
-    crop_y: float = 0.5,
-    max_size: int = 480,
-) -> Image.Image:
-    """Show the source photo with the active square crop outlined."""
-    w, h = img.size
-    side = max(1, round(min(w, h) / max(1.0, min(3.0, float(zoom)))))
-    left = round((w - side) * max(0.0, min(1.0, float(crop_x))))
-    top = round((h - side) * max(0.0, min(1.0, float(crop_y))))
-    guide = img.convert("RGB").copy()
-    overlay = Image.new("RGBA", guide.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    box = (left, top, left + side - 1, top + side - 1)
-    draw.rectangle(box, fill=(0, 174, 66, 22), outline=(255, 255, 255, 230), width=max(2, w // 500))
-    draw.rectangle(box, outline=(0, 174, 66, 255), width=max(2, w // 900))
-    guide = Image.alpha_composite(guide.convert("RGBA"), overlay).convert("RGB")
-    guide.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-    return guide
-
-
 def srgb_to_lab(rgb) -> np.ndarray:
     c = np.asarray(rgb, dtype=np.float64) / 255.0
     lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
