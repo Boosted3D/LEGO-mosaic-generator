@@ -112,7 +112,8 @@ with st.sidebar:
                 swatch_col, toggle_col = st.columns([1, 1], gap="small")
                 swatch_col.markdown(
                     f'<div class="palette-swatch"><span class="swatch-{color.code}" '
-                    f'title="{html.escape(color.name_en)} · {color.code}" '
+                    f'title="Bambu Lab: {html.escape(color.name_en, quote=True)} '
+                    f'({color.code} · {color.hex})" '
                     f'style="background-color:{color.hex} !important;"></span></div>',
                     unsafe_allow_html=True,
                 )
