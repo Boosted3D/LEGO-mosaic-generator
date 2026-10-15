@@ -2,10 +2,12 @@
 import io
 import html
 import hashlib
+import json
 import tempfile
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_cropper import st_cropper
 
 import lego_mosaic as L
@@ -42,8 +44,6 @@ html, body, [class*="css"] { font-family: Inter, ui-sans-serif, system-ui, sans-
 .upload-copy span { display:block; color:#9299a6; font-size:.82rem; margin-top:5px; }
 .sidebar-section-title { color:#838c98; font-size:.68rem; font-weight:700; letter-spacing:.11em; margin:18px 0 8px; }
 .sidebar-rule { border:0; border-top:1px solid #2d313a; margin:14px 0; }
-.palette-swatch { display:flex; align-items:center; justify-content:center; min-height:38px; }
-.palette-swatch span { display:block; width:22px; height:22px; border:1px solid #ffffff66; border-radius:50%; }
 .empty-preview { min-height:300px; border:1px solid #2d313a; border-radius:18px; background:radial-gradient(ellipse at 50% 35%,#171b22 0%,#111318 70%); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px; text-align:center; }
 .placeholder-grid { display:grid; grid-template-columns:repeat(10,16px); gap:4px; margin-bottom:24px; opacity:.44; }
 .placeholder-grid span { width:16px; height:16px; border-radius:4px; background:#252b34; border:1px solid #343b46; }
@@ -98,29 +98,52 @@ with st.sidebar:
         select_all_col, clear_all_col = st.columns(2)
         select_all_col.button("Select all", use_container_width=True, on_click=set_color_selection, args=(True,))
         clear_all_col.button("Clear all", use_container_width=True, on_click=set_color_selection, args=(False,))
-        swatch_color_css = "".join(
-            f'.palette-swatch .swatch-{color.code} '
-            f'{{background-color:{color.hex} !important;}}'
-            for color in L.COLOR_PALETTE
-        )
-        st.markdown(f"<style>{swatch_color_css}</style>", unsafe_allow_html=True)
         color_columns = st.columns(2, gap="small")
         selected_codes = []
         for index, color in enumerate(L.COLOR_PALETTE):
             with color_columns[index % 2]:
                 color_key = f"use_color_{color.code}"
                 swatch_col, toggle_col = st.columns([1, 1], gap="small")
-                swatch_col.markdown(
-                    f'<div class="palette-swatch"><span class="swatch-{color.code}" '
-                    f'title="Bambu Lab: {html.escape(color.name_en, quote=True)} '
-                    f'({color.code} · {color.hex})" '
-                    f'style="background-color:{color.hex} !important;"></span></div>',
-                    unsafe_allow_html=True,
+                color_title = html.escape(
+                    f"Bambu Lab: {color.name_en} ({color.code} · {color.hex})",
+                    quote=True,
                 )
-                checked = toggle_col.toggle(
-                    color.name_en, value=True, key=color_key,
-                    label_visibility="collapsed",
-                )
+                with swatch_col:
+                    components.html(
+                        f"""<!doctype html><html><head><style>
+                        html,body{{margin:0;width:100%;height:42px;background:transparent;}}
+                        body{{display:flex;align-items:center;justify-content:center;}}
+                        button{{width:24px;height:24px;padding:0;border:1px solid #ffffff66;
+                          border-radius:50%;background-color:{color.hex} !important;cursor:pointer;}}
+                        button:hover{{outline:2px solid #ffffffaa;outline-offset:2px;}}
+                        button.copied{{outline:2px solid #0d9488;outline-offset:2px;}}
+                        </style></head><body>
+                        <button id="swatch" type="button" title="{color_title}"
+                          aria-label="Copy {color.hex}"></button>
+                        <script>
+                        const swatch=document.getElementById("swatch");
+                        const color={json.dumps(color.hex)};
+                        swatch.addEventListener("click",async()=>{{
+                          try{{
+                            await navigator.clipboard.writeText(color);
+                          }}catch(error){{
+                            const field=document.createElement("textarea");
+                            field.value=color;field.style.position="fixed";field.style.opacity="0";
+                            document.body.appendChild(field);field.select();document.execCommand("copy");field.remove();
+                          }}
+                          swatch.classList.add("copied");
+                          swatch.title="Copied "+color;
+                          setTimeout(()=>{{swatch.classList.remove("copied");swatch.title={json.dumps(color_title)};}},1200);
+                        }});
+                        </script></body></html>""",
+                        height=42,
+                        scrolling=False,
+                    )
+                with toggle_col:
+                    checked = st.toggle(
+                        color.name_en, value=True, key=color_key,
+                        label_visibility="collapsed",
+                    )
                 if checked:
                     selected_codes.append(color.code)
         selected_colors = tuple(selected_codes)
