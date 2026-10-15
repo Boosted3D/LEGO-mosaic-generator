@@ -249,6 +249,10 @@ with control_col:
             with swatches_col:
                 render_color_swatch_legend(L.GRAYSCALE_PALETTE)
 
+        if source_image is not None:
+            st.markdown("**Adjust your mosaic**")
+            st.caption("Drag the square to move it; drag the corner to resize.")
+
         original_col, live_preview_col = st.columns(2, gap="medium")
 
         crop_zoom, crop_x, crop_y = 1.0, 0.5, 0.5
@@ -257,8 +261,6 @@ with control_col:
         with original_col:
             st.markdown("**Original photo · crop**")
             if source_image is not None:
-                st.markdown("**Adjust your mosaic**")
-                st.caption("Drag the square to move it; drag the corner to resize.")
                 crop_display = source_image.copy()
                 crop_display.thumbnail((800, 800))
                 crop_display_buffer = io.BytesIO()
