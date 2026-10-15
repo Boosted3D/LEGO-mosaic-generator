@@ -414,8 +414,8 @@ with live_preview_slot.container():
     st.markdown("**Live mosaic preview**")
     if preview_idx is not None:
         st.image(
-            L.render_preview_image(preview_idx, cell=max(5, 430 // grid_size), palette=preview_palette),
-            width=430,
+            L.render_preview_image(preview_idx, cell=max(5, 500 // grid_size), palette=preview_palette),
+            width=500,
         )
     else:
         st.caption("Upload a photo to see the live mosaic preview.")
