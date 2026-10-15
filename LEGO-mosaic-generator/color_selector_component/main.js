@@ -17,10 +17,12 @@
   }
 
   function copyHex(hex) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(hex).catch(() => fallbackCopy(hex));
-    } else {
-      fallbackCopy(hex);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(hex).catch(() => {});
+      }
+    } catch (_) {
+      // Clipboard access may be blocked in embedded browsers; selection still works.
     }
   }
 
@@ -56,10 +58,24 @@
         const ordered = (lastArgs.colors || [])
           .map((entry) => entry.code)
           .filter((code) => next.has(code));
+        // Update locally at click time so the swatch responds immediately,
+        // without waiting for Streamlit's round-trip and rerender.
+        lastArgs.selected_codes = ordered;
+        for (const swatch of swatches.children) {
+          const entry = lastArgs.colors.find((item) => item.code === swatch.dataset.code);
+          const selectedNow = next.has(swatch.dataset.code);
+          swatch.setAttribute("aria-pressed", selectedNow ? "true" : "false");
+          swatch.style.setProperty(
+            "background-color",
+            selectedNow ? entry.hex : "#0e1117",
+            "important",
+          );
+        }
         copyHex(color.hex);
         status.textContent = `${color.name} ${next.has(color.code) ? "selected" : "removed"}; ${color.hex} copied`;
         sendValue(ordered);
       });
+      button.dataset.code = color.code;
       swatches.appendChild(button);
     });
     post("streamlit:setFrameHeight", { height: 40 });
