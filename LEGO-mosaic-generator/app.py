@@ -219,41 +219,78 @@ with control_col:
                 st.error(str(exc))
                 st.stop()
 
+        swatches_col, palette_mode_col = st.columns([1, 2.7], gap="small")
+        with palette_mode_col:
+            mode_label = st.radio("Palette", ["Color", "Grayscale"], horizontal=True)
+        palette_mode = "color" if mode_label == "Color" else "grayscale"
+        if palette_mode == "color":
+            color_codes = tuple(color.code for color in L.COLOR_PALETTE)
+            selected_codes = tuple(
+                code for code in color_codes
+                if code in st.session_state.get("selected_color_codes", color_codes)
+            )
+            with swatches_col:
+                selected_result = color_swatch_selector(
+                    colors=[
+                        {"code": color.code, "name": color.name_en, "hex": color.hex}
+                        for color in L.COLOR_PALETTE
+                    ],
+                    selected_codes=list(selected_codes),
+                    key="mosaic_color_selector",
+                )
+            if isinstance(selected_result, (list, tuple)):
+                selected_codes = tuple(code for code in color_codes if code in selected_result)
+                st.session_state["selected_color_codes"] = selected_codes
+            elif "selected_color_codes" not in st.session_state:
+                st.session_state["selected_color_codes"] = selected_codes
+            selected_colors = tuple(st.session_state["selected_color_codes"])
+        else:
+            selected_colors = None
+            with swatches_col:
+                render_color_swatch_legend(L.GRAYSCALE_PALETTE)
+
+        original_col, live_preview_col = st.columns(2, gap="medium")
+
         crop_zoom, crop_x, crop_y = 1.0, 0.5, 0.5
         cropped_image = None
         processed_image_bytes = None
-        if source_image is not None:
-            st.markdown("**Adjust your mosaic**")
-            st.caption("Drag the square to move it; drag the corner to resize.")
-            crop_display = source_image.copy()
-            crop_display.thumbnail((800, 800))
-            crop_display_buffer = io.BytesIO()
-            crop_display.save(crop_display_buffer, format="PNG")
-            crop_value = square_cropper(
-                image_data=base64.b64encode(crop_display_buffer.getvalue()).decode("ascii"),
-                key=f"mosaic_cropper_{hashlib.sha256(image_bytes).hexdigest()[:12]}",
-                default={"left": 0.2, "top": 0.2, "size": 0.6},
-            )
-            crop_width, crop_height = source_image.size
-            if not isinstance(crop_value, dict):
-                default_side = 0.6 * min(crop_width, crop_height)
-                crop_value = {
-                    "left": (crop_width - default_side) / (2 * crop_width),
-                    "top": (crop_height - default_side) / (2 * crop_height),
-                    "size": 0.6,
-                }
-            crop_size = max(1, min(
-                min(crop_width, crop_height),
-                round(float(crop_value.get("size", 0.6)) * min(crop_width, crop_height)),
-            ))
-            crop_left = max(0, min(crop_width - crop_size, round(float(crop_value.get("left", 0.2)) * crop_width)))
-            crop_top = max(0, min(crop_height - crop_size, round(float(crop_value.get("top", 0.2)) * crop_height)))
-            cropped_image = source_image.crop((crop_left, crop_top, crop_left + crop_size, crop_top + crop_size))
-            cropped_buffer = io.BytesIO()
-            cropped_image.save(cropped_buffer, format="PNG")
-            processed_image_bytes = cropped_buffer.getvalue()
-        else:
-            st.caption("Upload a photo to choose the area used for your mosaic.")
+        with original_col:
+            st.markdown("**Original photo · crop**")
+            if source_image is not None:
+                st.markdown("**Adjust your mosaic**")
+                st.caption("Drag the square to move it; drag the corner to resize.")
+                crop_display = source_image.copy()
+                crop_display.thumbnail((800, 800))
+                crop_display_buffer = io.BytesIO()
+                crop_display.save(crop_display_buffer, format="PNG")
+                crop_value = square_cropper(
+                    image_data=base64.b64encode(crop_display_buffer.getvalue()).decode("ascii"),
+                    key=f"mosaic_cropper_{hashlib.sha256(image_bytes).hexdigest()[:12]}",
+                    default={"left": 0.2, "top": 0.2, "size": 0.6},
+                )
+                crop_width, crop_height = source_image.size
+                if not isinstance(crop_value, dict):
+                    default_side = 0.6 * min(crop_width, crop_height)
+                    crop_value = {
+                        "left": (crop_width - default_side) / (2 * crop_width),
+                        "top": (crop_height - default_side) / (2 * crop_height),
+                        "size": 0.6,
+                    }
+                crop_size = max(1, min(
+                    min(crop_width, crop_height),
+                    round(float(crop_value.get("size", 0.6)) * min(crop_width, crop_height)),
+                ))
+                crop_left = max(0, min(crop_width - crop_size, round(float(crop_value.get("left", 0.2)) * crop_width)))
+                crop_top = max(0, min(crop_height - crop_size, round(float(crop_value.get("top", 0.2)) * crop_height)))
+                cropped_image = source_image.crop((crop_left, crop_top, crop_left + crop_size, crop_top + crop_size))
+                cropped_buffer = io.BytesIO()
+                cropped_image.save(cropped_buffer, format="PNG")
+                processed_image_bytes = cropped_buffer.getvalue()
+            else:
+                st.caption("Upload a photo to choose the area used for your mosaic.")
+        with live_preview_col:
+            st.markdown("**Live mosaic preview**")
+            live_preview_slot = st.empty()
 
     # Format and image controls follow the crop tool in the workflow.
     crop_zoom, crop_x, crop_y = 1.0, 0.5, 0.5
@@ -287,33 +324,6 @@ with control_col:
         )
         st.caption(f"Minimum space between studs: {L.MIN_STUD_GAP_MM:.1f} mm")
 
-    with st.expander("03 · Color Palette", expanded=True):
-        mode_label = st.radio("Palette", ["Color", "Grayscale"], horizontal=True)
-        palette_mode = "color" if mode_label == "Color" else "grayscale"
-        if palette_mode == "color":
-            color_codes = tuple(color.code for color in L.COLOR_PALETTE)
-            selected_codes = tuple(
-                code for code in color_codes
-                if code in st.session_state.get("selected_color_codes", color_codes)
-            )
-            selected_result = color_swatch_selector(
-                colors=[
-                    {"code": color.code, "name": color.name_en, "hex": color.hex}
-                    for color in L.COLOR_PALETTE
-                ],
-                selected_codes=list(selected_codes),
-                key="mosaic_color_selector",
-            )
-            if isinstance(selected_result, (list, tuple)):
-                selected_codes = tuple(code for code in color_codes if code in selected_result)
-                st.session_state["selected_color_codes"] = selected_codes
-            elif "selected_color_codes" not in st.session_state:
-                st.session_state["selected_color_codes"] = selected_codes
-            selected_colors = tuple(st.session_state["selected_color_codes"])
-        else:
-            selected_colors = None
-            render_color_swatch_legend(L.GRAYSCALE_PALETTE)
-
 # Build the same image-to-stud grid used by the generator for instant live updates.
 preview_palette = L.palette_for_mode(palette_mode, selected_colors)
 preview_idx = None
@@ -346,22 +356,22 @@ if cropped_image is not None:
     )
     current_result_signature = hashlib.sha256(repr(signature_values).encode("utf-8")).hexdigest()
 
+# The mosaic preview sits beside the crop tool above the image adjustments.
+with live_preview_slot.container():
+    if preview_idx is not None:
+        st.image(
+            L.render_preview_image(preview_idx, cell=max(5, 500 // grid_size), palette=preview_palette),
+            width=500,
+        )
+    else:
+        st.caption("Upload a photo to see the live mosaic preview.")
+
 # Step 4: live preview, BOM, generation status, and project exports
 workspace_col = st.container()
 with workspace_col:
     st.markdown('<div id="preview-workspace-anchor"></div><h2 class="workspace-title">04 · Live Preview &amp; Export</h2>', unsafe_allow_html=True)
     res = st.session_state.get("res") if st.session_state.get("res_signature") == current_result_signature else None
     if preview_idx is not None:
-        photo_col, mosaic_col = st.columns(2, gap="medium")
-        with photo_col:
-            st.markdown("**Selected photo area**")
-            st.image(cropped_image, width=500)
-        with mosaic_col:
-            st.markdown("**Live mosaic preview**")
-            st.image(
-                L.render_preview_image(preview_idx, cell=max(5, 500 // grid_size), palette=preview_palette),
-                width=500,
-            )
         st.markdown("**Parts overview**")
         render_bom_table(live_bom)
     else:
