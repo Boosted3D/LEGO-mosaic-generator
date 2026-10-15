@@ -98,6 +98,12 @@ with st.sidebar:
         select_all_col, clear_all_col = st.columns(2)
         select_all_col.button("Select all", use_container_width=True, on_click=set_color_selection, args=(True,))
         clear_all_col.button("Clear all", use_container_width=True, on_click=set_color_selection, args=(False,))
+        swatch_color_css = "".join(
+            f'.palette-swatch .swatch-{color.code} '
+            f'{{background-color:{color.hex} !important;}}'
+            for color in L.COLOR_PALETTE
+        )
+        st.markdown(f"<style>{swatch_color_css}</style>", unsafe_allow_html=True)
         color_columns = st.columns(2, gap="small")
         selected_codes = []
         for index, color in enumerate(L.COLOR_PALETTE):
@@ -105,8 +111,9 @@ with st.sidebar:
                 color_key = f"use_color_{color.code}"
                 swatch_col, toggle_col = st.columns([1, 1], gap="small")
                 swatch_col.markdown(
-                    f'<div class="palette-swatch"><span title="{html.escape(color.name_en)} · {color.code}" '
-                    f'style="background-color:{color.hex} !important"></span></div>',
+                    f'<div class="palette-swatch"><span class="swatch-{color.code}" '
+                    f'title="{html.escape(color.name_en)} · {color.code}" '
+                    f'style="background-color:{color.hex} !important;"></span></div>',
                     unsafe_allow_html=True,
                 )
                 checked = toggle_col.toggle(
