@@ -2,6 +2,7 @@
 import io
 import html
 import hashlib
+import json
 import tempfile
 from pathlib import Path
 
@@ -42,12 +43,16 @@ html, body, [class*="css"] { font-family: Inter, ui-sans-serif, system-ui, sans-
 .upload-copy span { display:block; color:#9299a6; font-size:.82rem; margin-top:5px; }
 .sidebar-section-title { color:#838c98; font-size:.68rem; font-weight:700; letter-spacing:.11em; margin:18px 0 8px; }
 .sidebar-rule { border:0; border-top:1px solid #2d313a; margin:14px 0; }
-.swatch-chip { display:flex; justify-content:center; margin:5px 0 1px; }
-.swatch-chip .swatch-dot { width:21px; height:21px; margin:0; border:1px solid #ffffff44; }
-[class*="st-key-use_color_"] [data-testid="stCheckbox"] label { justify-content:center; min-height:31px; border:1px solid #343a44; border-radius:999px; padding:2px 8px; background:#15181f; transition:opacity .15s ease,border-color .15s ease,background .15s ease; }
-[class*="st-key-use_color_"] [data-testid="stCheckbox"] label:has(input:checked) { border-color:#00ae42; background:#102018; box-shadow:0 0 0 2px #00ae4217; opacity:1; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] { margin:0; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label { position:relative; display:flex; align-items:center; justify-content:flex-start; gap:9px; box-sizing:border-box; width:100%; min-height:42px; padding:7px 9px; border:1px solid #343a44; border-radius:6px; background:#15181f; cursor:pointer; transition:opacity .15s ease,border-color .15s ease,background .15s ease; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label:has(input:checked) { border-color:#00ae42; background:#102018; opacity:1; }
 [class*="st-key-use_color_"] [data-testid="stCheckbox"] label:not(:has(input:checked)) { opacity:.5; }
-[class*="st-key-use_color_"] [data-testid="stCheckbox"] label > span:first-child { display:none; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label input { position:absolute; width:1px; height:1px; margin:0; opacity:0; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label > div:first-child,
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label > span:first-child { position:absolute !important; width:1px !important; height:1px !important; overflow:hidden !important; clip-path:inset(50%); }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label::before { content:""; display:block; flex:0 0 14px; width:14px; height:14px; border:1px solid #ffffff66; border-radius:50%; background-color:#777; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label::after { display:none; position:absolute; left:calc(100% + 8px); top:50%; transform:translateY(-50%); z-index:20; padding:5px 8px; border:1px solid #3b414c; border-radius:4px; background:#20242c; color:#f1f3f5; font-size:.75rem; white-space:nowrap; pointer-events:none; }
+[class*="st-key-use_color_"] [data-testid="stCheckbox"] label:hover::after { display:block; }
 .empty-preview { min-height:300px; border:1px solid #2d313a; border-radius:18px; background:radial-gradient(ellipse at 50% 35%,#171b22 0%,#111318 70%); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px; text-align:center; }
 .placeholder-grid { display:grid; grid-template-columns:repeat(10,16px); gap:4px; margin-bottom:24px; opacity:.44; }
 .placeholder-grid span { width:16px; height:16px; border-radius:4px; background:#252b34; border:1px solid #343b46; }
@@ -102,12 +107,20 @@ with st.sidebar:
         select_all_col, clear_all_col = st.columns(2)
         select_all_col.button("Select all", use_container_width=True, on_click=set_color_selection, args=(True,))
         clear_all_col.button("Clear all", use_container_width=True, on_click=set_color_selection, args=(False,))
-        color_columns = st.columns(3)
+        color_swatches_css = "".join(
+            f'.st-key-use_color_{color.code} [data-testid="stCheckbox"] label::before '
+            f'{{background-color:{color.hex} !important;}} '
+            f'.st-key-use_color_{color.code} [data-testid="stCheckbox"] label::after '
+            f'{{content:{json.dumps(f"{color.name_en} · {color.code}")};}}'
+            for color in L.COLOR_PALETTE
+        )
+        st.markdown(f"<style>{color_swatches_css}</style>", unsafe_allow_html=True)
+        color_columns = st.columns(3, gap="small")
         selected_codes = []
         for index, color in enumerate(L.COLOR_PALETTE):
             with color_columns[index % 3]:
-                st.markdown(f'<div class="swatch-chip"><span class="swatch-dot" title="{html.escape(color.name_en)}" style="background:{color.hex}"></span></div>', unsafe_allow_html=True)
-                checked = st.checkbox(color.code, value=True, key=f"use_color_{color.code}", help=color.name_en)
+                color_key = f"use_color_{color.code}"
+                checked = st.checkbox(color.name_en, value=True, key=color_key)
                 if checked:
                     selected_codes.append(color.code)
         selected_colors = tuple(selected_codes)
