@@ -187,9 +187,23 @@ if upload is not None:
             saturation=saturation, sharpness=sharpness,
             crop_zoom=crop_zoom, crop_x=crop_x, crop_y=crop_y,
         )
-        st.subheader("Live mosaic preview")
-        st.caption(f"{grid_size}×{grid_size} studs · preview updates as you adjust the sliders")
-        st.image(L.render_preview_image(preview_idx, palette=preview_palette), use_container_width=True)
+        st.subheader("Live preview")
+        photo_col, mosaic_col = st.columns(2, gap="medium")
+        with photo_col:
+            st.caption("Original photo · square crop")
+            st.image(
+                L.render_crop_guide(source_image, crop_zoom, crop_x, crop_y),
+                width=420,
+            )
+        with mosaic_col:
+            st.caption(f"Mosaic · {grid_size}×{grid_size} studs")
+            preview_cell_size = max(7, 420 // grid_size)
+            st.image(
+                L.render_preview_image(
+                    preview_idx, cell=preview_cell_size, palette=preview_palette
+                ),
+                width=420,
+            )
 
     if st.button("Generate mosaic", type="primary", disabled=not preview_palette):
         try:
