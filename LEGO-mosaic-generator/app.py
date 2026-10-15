@@ -101,9 +101,9 @@ st.markdown(
     """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-:root { --surface:#111318; --card:#15181f; --line:#2d313a; --muted:#9299a6; --green:#00ae42; --teal:#0d9488; }
+:root { --surface:#0e1117; --card:#141821; --line:#2d333d; --muted:#9299a6; --green:#00ae42; --teal:#0d9488; }
 html, body, [class*="css"] { font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
-.stApp { background:#0c0e12; }
+.stApp { background:#0e1117; }
 [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display:none; }
 .main .block-container { max-width:1440px; padding:1.5rem 2rem 3rem; }
 [data-testid="stBaseButton-primary"] { background:var(--green); border:1px solid var(--green); border-radius:8px; color:white; transition:filter .15s ease,transform .15s ease,box-shadow .15s ease; }
@@ -128,9 +128,9 @@ html, body, [class*="css"] { font-family:Inter,ui-sans-serif,system-ui,sans-seri
 .step-item.active .step-number,.step-item.done .step-number { border-color:#00ae42; background:#00ae42; color:#fff; }
 .step-label { font-weight:600; font-size:.83rem; }
 .workspace-title { margin:0 0 12px; color:#eef1f5; font-size:1rem; font-weight:650; }
-.control-panel,.preview-panel { padding:16px; border:1px solid #292e37; border-radius:9px; background:#111318; }
-.control-panel [data-testid="stExpander"] { border:1px solid #292e37; border-radius:7px; background:#13161c; }
-.control-panel [data-testid="stExpander"] summary { font-size:.88rem; font-weight:600; }
+[data-testid="stVerticalBlockBorderWrapper"] { border-color:#2d333d !important; border-radius:7px !important; background:#141821; }
+[data-testid="stExpander"] { border:1px solid #2d333d; border-radius:7px; background:#141821; }
+[data-testid="stExpander"] summary { font-size:.88rem; font-weight:600; }
 .upload-copy { text-align:center; padding:18px 12px 5px; border:1px dashed #343943; border-bottom:0; border-radius:8px 8px 0 0; background:#13161c; }
 .upload-copy svg { width:25px; height:25px; color:#aab2bd; margin-bottom:7px; }
 .upload-copy strong { display:block; color:#f0f2f5; font-size:.9rem; font-weight:600; }
@@ -162,7 +162,7 @@ html, body, [class*="css"] { font-family:Inter,ui-sans-serif,system-ui,sans-seri
   .main .block-container { padding:1rem .75rem 2rem; }
   .app-header { align-items:flex-start; flex-direction:column; }
   .stepper { grid-template-columns:1fr; gap:6px; }
-  .control-panel,.preview-panel { padding:12px; }
+  [data-testid="stVerticalBlockBorderWrapper"] { padding:10px; }
 }
 </style>
 """,
@@ -191,7 +191,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 active_step = 3 if st.session_state.get("res") else 2 if st.session_state.get("image_upload") else 1
-step_labels = ("Photo & Format", "Colors & Editing", "Preview & Export")
+step_labels = ("Upload & Format", "Image Editing", "Colors · Preview & Export")
 step_items = []
 for step_number, step_label in enumerate(step_labels, start=1):
     status = "active" if step_number == active_step else "done" if step_number < active_step else ""
@@ -208,7 +208,7 @@ control_col, workspace_col = st.columns([0.35, 0.65], gap="large")
 with control_col:
     st.markdown('<h2 class="workspace-title">Control Center</h2>', unsafe_allow_html=True)
 
-    with st.expander("Photo & Format", expanded=True):
+    with st.expander("01 · Upload & Format", expanded=True):
         st.markdown(
             '''<div class="upload-copy">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -242,10 +242,10 @@ with control_col:
     brightness = contrast = saturation = sharpness = 1.0
     cropped_image = None
     processed_image_bytes = None
-    with st.expander("Image editing", expanded=upload is not None):
+    with st.expander("02 · Image Editing", expanded=upload is not None):
         auto = st.checkbox("Auto-enhance contrast", value=True)
-        brightness = st.slider("Brightness", 0.5, 2.0, 1.0, 0.05)
-        contrast = st.slider("Contrast", 0.5, 2.0, 1.0, 0.05)
+        brightness = st.slider("Brightness", 0.5, 2.0, 1.0, 0.05, format="%.2f")
+        contrast = st.slider("Contrast", 0.5, 2.0, 1.0, 0.05, format="%.2f")
         extra_cols = st.columns(2, gap="small")
         saturation = extra_cols[0].slider("Color intensity", 0.0, 1.8, 1.0, 0.05)
         sharpness = extra_cols[1].slider("Sharpness", 0.0, 2.0, 1.0, 0.05)
@@ -282,7 +282,7 @@ with control_col:
             auto = st.session_state.get("auto_enhance", True)
             st.caption("Upload a photo to unlock the crop and live image controls.")
 
-    with st.expander("Color palette", expanded=True):
+    with st.expander("03 · Color Palette", expanded=True):
         mode_label = st.radio("Palette", ["Color", "Grayscale"], horizontal=True)
         palette_mode = "color" if mode_label == "Color" else "grayscale"
         selected_colors = None
@@ -312,7 +312,7 @@ with control_col:
                             selected_codes.append(color.code)
             selected_colors = tuple(selected_codes)
 
-    with st.expander("Print settings", expanded=False):
+    with st.expander("Additional Print Settings", expanded=False):
         loose_all = st.checkbox("Include loose studs (needed + reserve)", value=True)
         edge_margin = st.number_input(
             "Edge margin (mm)", min_value=0.0, max_value=50.0,
